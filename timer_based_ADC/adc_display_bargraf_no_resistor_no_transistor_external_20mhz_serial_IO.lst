@@ -1,0 +1,714 @@
+gpasm-0.13.3 beta               adc_display_bargraf_no_resistor_no_transistor_external_20mhz_serial_IO.asm5-22-2009  21:03:16          PAGE  1
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+ 
+               00001 ; this is somewhat slower implementation of 16bit ADC + LED bar display. 
+               00002 ; instead of turning all LEDs at once, it pulses each LED for a predefined period of time.
+               00003 ; this allows to use just one resistor , and as current flows via max one LED at a time, this allows aswell to get rid of 
+               00004 ; external transistor. only required elements are two resistors, which are not really nessesary if one assumes that 
+               00005 ; pulse current will be so short that no damage will happen to either LEDs or PIC transistors. 
+               00006 
+               00007 ; TODO : make RA5 useable as intensity delay , and branch to versions allowing also RA5 controlling switchoff and powerdown,
+               00008 ; implement WDT to powerdown mode etc.
+               00009 
+               00010 ; TODO : implement RA4 driven module. 7 segment display? another LED bar? whatever you wish !
+               00011 
+               00012 LIST            P=PIC16F627
+               00013 #INCLUDE        "p16f627.inc"
+               00001         LIST
+               00002 ; P16F627.INC  Standard Header File, Version 1.01    Microchip Technology, Inc.
+               00261         LIST
+               00014 
+               00015 ;        __CONFIG        _BODEN_ON & _CP_OFF & _DATA_CP_OFF & _PWRTE_ON & _WDT_OFF & _LVP_OFF & _MCLRE_OFF & _INTRC_OSC_NOCLKOUT
+002007 3F42    00016         __CONFIG        _BODEN_ON & _CP_OFF & _DATA_CP_OFF & _PWRTE_ON & _WDT_OFF & _LVP_OFF & _MCLRE_OFF & _HS_OSC
+               00017 
+               00018 bank0           macro
+               00019                 bcf     STATUS,RP0
+               00020                 endm
+               00021 bank1           macro
+               00022                 bsf     STATUS,RP0
+               00023                 endm
+               00024 
+  00000050     00025 DISPLAY_TEMP1   equ   0x50
+  00000051     00026 DISPLAY_RESULT_1        equ   0x51
+  00000052     00027 DISPLAY_RESULT_2        equ   0x52
+  00000053     00028 DISPLAY_RESULT_3        equ   0x53
+  00000000     00029 RA0             equ 0x00
+  00000001     00030 RA1             equ 0x01
+  00000002     00031 RA2             equ 0x02
+  00000003     00032 RA3             equ 0x03
+  00000004     00033 RA4             equ 0x04
+  00000005     00034 RA5             equ 0x05
+  00000006     00035 RA6             equ 0x06
+  00000007     00036 RA7             equ 0x07
+               00037 
+  00000000     00038 RB0             equ 0x00
+  00000001     00039 RB1             equ 0x01
+  00000002     00040 RB2             equ 0x02
+  00000003     00041 RB3             equ 0x03
+  00000004     00042 RB4             equ 0x04
+  00000005     00043 RB5             equ 0x05
+  00000006     00044 RB6             equ 0x06
+  00000007     00045 RB7             equ 0x07
+               00046 
+0000           00047                 org 0            ; Reset Vector
+0000 2805      00048                 goto INIT
+               00049 
+0004           00050                 org 4            ; Interrupt Vector
+0004 28D4      00051                 goto COMP
+gpasm-0.13.3 beta               adc_display_bargraf_no_resistor_no_transistor_external_20mhz_serial_IO.asm5-22-2009  21:03:16          PAGE  2
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+ 
+0005           00052                 org 5
+               00053 
+0005           00054 INIT:           bank0
+0005 1283          M                 bcf     STATUS,RP0
+               00055 ;               movlw b'00001101'      ; zwei komparatoren
+0006 3005      00056                 movlw b'00000101'       ; one comparator 
+0007 009F      00057                 movwf CMCON
+               00058 ;               movlw H'14'      ; 
+0008 3004      00059                 movlw b'00000100'      ; Timer 1:
+               00060                                         ; 0 - TMR1ON - 0(off)
+               00061                                         ; 1 - TMR1CS - 0(off) 
+               00062                                         ; 2 - /T1SYNC - 1(off)
+               00063                                         ; 3 - T1OSCEN - 0(off)
+               00064 
+               00065                                         ; 4 - T1CKPS0 - 0 
+               00066                                         ; 5 - T1CKPS1 - 0 ; 1:1 prescaler
+               00067                                         ; 6 - - 0 
+               00068                                         ; 7 - - 0 
+               00069 
+0009 0090      00070                 movwf T1CON      ; A 1 MHz clock is used
+000A 0185      00071                 clrf PORTA
+000B 0186      00072                 clrf PORTB
+               00073                 bank1
+000C 1683          M                 bsf     STATUS,RP0
+Message [302] : Register in operand not in bank 0. Ensure bank bits are correct.
+000D 0186      00074                 clrf TRISB
+               00075 ;               movlw H'CF'      ; Enable Vref = 3.6v
+               00076 ;               movwf VRCON
+000E 178B      00077                 bsf INTCON,GIE   ; Enable Global Int
+000F 170B      00078                 bsf INTCON,PEIE  ; Unmask Peripheral Int
+               00079 
+               00080 
+0010           00081 MAIN:
+               00082 
+0010 2013      00083                 call CONVERT
+0011 2031      00084                 call BARGRAF_DISPLAY
+               00085 
+0012 2810      00086                 goto MAIN
+               00087 
+               00088 ;-------------------------16bit ADC subroutine
+               00089 
+0013           00090 CONVERT:        
+               00091                 bank0
+0013 1283          M                 bcf     STATUS,RP0
+0014 018E      00092                 clrf TMR1L       ; Clear Timer 1 L
+0015 018F      00093                 clrf TMR1H       ; Clear Timer 1 H
+               00094 
+               00095                 bank1
+0016 1683          M                 bsf     STATUS,RP0
+0017 100C      00096                 bcf PIR1,TMR1IF
+Message [302] : Register in operand not in bank 0. Ensure bank bits are correct.
+0018 1505      00097                 bsf     TRISA,2  ; set RA2 as input
+               00098 
+0019           00099 DISCHARGE_COMPARATOR_CAP:
+gpasm-0.13.3 beta               adc_display_bargraf_no_resistor_no_transistor_external_20mhz_serial_IO.asm5-22-2009  21:03:16          PAGE  3
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+ 
+               00100                 bank1            ; Main program loop
+0019 1683          M                 bsf     STATUS,RP0
+Message [302] : Register in operand not in bank 0. Ensure bank bits are correct.
+001A 1085      00101                 bcf TRISA,1      ; Set RA1 as output
+               00102                 bank0
+001B 1283          M                 bcf     STATUS,RP0
+001C 1085      00103                 bcf PORTA,1      ; Discharge capacitor
+001D 0000      00104                 nop             ; wait 200ns
+               00105                 bank1           ; another 200ns. switch bank to 1
+001E 1683          M                 bsf     STATUS,RP0
+Message [302] : Register in operand not in bank 0. Ensure bank bits are correct.
+001F 1485      00106                 bsf     TRISA,1  ; make RA1 input, 600ns
+               00107                 bank0           ; switch back to bank0 . 
+0020 1283          M                 bcf     STATUS,RP0
+0021 1885      00108                 btfsc   PORTA,1  ;  make sure capacitor got discharged
+0022 2819      00109                 goto    DISCHARGE_COMPARATOR_CAP ; if not, go back discharging it. 
+               00110                                 ; else 
+0023 130C      00111                 bcf PIR1,CMIF    ; Clear comp Int flag
+               00112                 bank1
+0024 1683          M                 bsf     STATUS,RP0
+               00113 
+               00114                                 ;               bsf TRISA,1      ; Reset RA1 as input,
+               00115                                  ; cap starts charging 
+               00116                                 
+               00117                 bank0
+0025 1283          M                 bcf     STATUS,RP0
+0026 1410      00118                 bsf T1CON,TMR1ON ; Start Timer 1
+0027 089F      00119                 movf CMCON,f     ; Read to sync output
+               00120                 bank1
+0028 1683          M                 bsf     STATUS,RP0
+Message [302] : Register in operand not in bank 0. Ensure bank bits are correct.
+0029 140C      00121                 bsf PIE1,TMR1IE  ;unmask TMR1 interrupt 
+002A 0000      00122                 nop
+Message [302] : Register in operand not in bank 0. Ensure bank bits are correct.
+002B 170C      00123                 bsf PIE1,CMIE    ; Unmask Comp Int
+               00124 
+002C 0000      00125 WAIT:           nop
+Message [302] : Register in operand not in bank 0. Ensure bank bits are correct.
+002D 1B0C      00126                 btfsc PIE1,CMIE  ; Wait for comp Int
+               00127                                 ; ie wait until Int
+002E 282C      00128                 goto WAIT        ; Enable bit has been
+               00129                                 ; cleared
+002F           00130 GETDATA:                        ; Timer 1 contains
+               00131                                 ; DATA (TMR1L TMR1H)
+               00132 
+               00133                 bank0
+002F 1283          M                 bcf     STATUS,RP0
+               00134 
+0030 0008      00135                 return
+               00136 
+               00137 ;-------------------------simple bargraf display subroutine
+               00138 
+0031           00139 BARGRAF_DISPLAY:
+               00140                 bank0
+gpasm-0.13.3 beta               adc_display_bargraf_no_resistor_no_transistor_external_20mhz_serial_IO.asm5-22-2009  21:03:16          PAGE  4
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+ 
+0031 1283          M                 bcf     STATUS,RP0
+0032 080E      00141                 movfw   TMR1L           ;we get only most significiant byte
+0033 39F8      00142                 andlw   b'11111000'     ;and most significiant nibble
+0034 00D0      00143                 movwf   DISPLAY_TEMP1   ;bit testing cannot operate on W
+               00144 
+               00145                 
+0035 01D1      00146                 clrf    DISPLAY_RESULT_1   ;we clear last display result
+0036 01D2      00147                 clrf    DISPLAY_RESULT_2  
+0037 01D3      00148                 clrf    DISPLAY_RESULT_3                
+               00149 
+0038 1FD0      00150                 btfss   DISPLAY_TEMP1,7 ; if the '8' bit is set
+0039 283E      00151                 goto    BIT_7_NOT
+               00152                 
+003A 30FF      00153                 movlw   b'11111111'
+003B 00D1      00154                 movwf   DISPLAY_RESULT_1
+003C 00D2      00155                 movwf   DISPLAY_RESULT_2
+003D 2873      00156                 goto    BIT_3_NOT ;if 7bit is set, it means '16'. 
+               00157 
+003E           00158 BIT_7_NOT
+003E 1F50      00159                 btfss   DISPLAY_TEMP1,6 ;if the '8' bit is set
+003F 2858      00160                 goto    BIT_6_NOT
+               00161                 
+0040 1403      00162                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+0041 0DD1      00163                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+0042 0DD2      00164                 rlf     DISPLAY_RESULT_2
+0043 1403      00165                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+0044 0DD1      00166                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+0045 0DD2      00167                 rlf     DISPLAY_RESULT_2
+0046 1403      00168                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+0047 0DD1      00169                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+0048 0DD2      00170                 rlf     DISPLAY_RESULT_2
+0049 1403      00171                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+004A 0DD1      00172                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+004B 0DD2      00173                 rlf     DISPLAY_RESULT_2
+004C 1403      00174                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+004D 0DD1      00175                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+004E 0DD2      00176                 rlf     DISPLAY_RESULT_2
+004F 1403      00177                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+0050 0DD1      00178                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+0051 0DD2      00179                 rlf     DISPLAY_RESULT_2
+0052 1403      00180                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+gpasm-0.13.3 beta               adc_display_bargraf_no_resistor_no_transistor_external_20mhz_serial_IO.asm5-22-2009  21:03:16          PAGE  5
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+ 
+0053 0DD1      00181                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+0054 0DD2      00182                 rlf     DISPLAY_RESULT_2
+0055 1403      00183                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+0056 0DD1      00184                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+0057 0DD2      00185                 rlf     DISPLAY_RESULT_2
+               00186                 
+0058           00187 BIT_6_NOT:
+0058 1ED0      00188                 btfss   DISPLAY_TEMP1,5 ;if the '4' bit is set
+0059 2866      00189                 goto    BIT_5_NOT
+005A 1403      00190                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+005B 0DD1      00191                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+005C 0DD2      00192                 rlf     DISPLAY_RESULT_2
+005D 1403      00193                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+005E 0DD1      00194                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+005F 0DD2      00195                 rlf     DISPLAY_RESULT_2
+0060 1403      00196                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+0061 0DD1      00197                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+0062 0DD2      00198                 rlf     DISPLAY_RESULT_2
+0063 1403      00199                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+0064 0DD1      00200                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+0065 0DD2      00201                 rlf     DISPLAY_RESULT_2
+0066           00202 BIT_5_NOT:
+               00203 
+0066 1E50      00204                 btfss   DISPLAY_TEMP1,4 ;if the '2' bit is set
+0067 286E      00205                 goto    BIT_4_NOT
+0068 1403      00206                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+0069 0DD1      00207                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+006A 0DD2      00208                 rlf     DISPLAY_RESULT_2
+006B 1403      00209                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+006C 0DD1      00210                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+006D 0DD2      00211                 rlf     DISPLAY_RESULT_2
+006E           00212 BIT_4_NOT:
+               00213 
+006E 1DD0      00214                 btfss   DISPLAY_TEMP1,3 ;if the '1' bit is set
+006F 2873      00215                 goto    BIT_3_NOT
+0070 1403      00216                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+0071 0DD1      00217                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+gpasm-0.13.3 beta               adc_display_bargraf_no_resistor_no_transistor_external_20mhz_serial_IO.asm5-22-2009  21:03:16          PAGE  6
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+ 
+0072 0DD2      00218                 rlf     DISPLAY_RESULT_2
+0073           00219 BIT_3_NOT:
+               00220                 
+               00221                 ;now 4 most significant bits can be displayed on a LED bar . 
+               00222                 bank1
+0073 1683          M                 bsf     STATUS,RP0
+Message [302] : Register in operand not in bank 0. Ensure bank bits are correct.
+0074 0186      00223                 clrf    TRISB ; we use PORTB configured as output for that
+0075 0000      00224                 nop
+Message [302] : Register in operand not in bank 0. Ensure bank bits are correct.
+0076 1205      00225                 bcf     TRISA,RA4 ; as PORTB is 8 bit, RA3 will select 3rd significant LED strip
+0077 0000      00226                 nop
+Message [302] : Register in operand not in bank 0. Ensure bank bits are correct.
+0078 1185      00227                 bcf     TRISA,RA3 ; as PORTB is 8 BIT, RA0 will select 2nd significant LED strip
+0079 0000      00228                 nop
+Message [302] : Register in operand not in bank 0. Ensure bank bits are correct.
+007A 1005      00229                 bcf     TRISA,RA0 ; as PORTB is 8 bit, RA3 will select 1st significant LED strip. 
+               00230                 bank0 
+007B 1283          M                 bcf     STATUS,RP0
+007C 0186      00231                 clrf    PORTB ; switch off all LEDS .
+               00232                                 ;1 used as output 'on' state is used because this way device 
+               00233                                 ;can be extended to drive bipolar transistors. 
+007D 1605      00234                 bsf     PORTA,RA4 ; 3rd significant bar is off (LED cathodes connect to RA4 via resistor) 
+               00235 ;               bcf     PORTA,RA4 ; prototype has intensity delay RA4 based so far, so let's test it
+007E 0000      00236                 nop
+007F 1585      00237                 bsf     PORTA,RA3 ; 2nd significant bar is off (LED cathodes connect to RA3 via resistor) 
+0080 0000      00238                 nop
+0081 1405      00239                 bsf     PORTA,RA0 ; 1st significant bar is off (LED cathodes connect to RA0 via resistor). 
+0082 0000      00240                 nop 
+               00241 
+               00242                                 
+0083 1005      00243                 bcf     PORTA,RA0 ; least significant byte first 
+               00244 
+               00245                                         ;simple magic - check bit in display result, and switch on same bit of PORTB
+               00246                                         ;calling intensity delay, then clear, and so on
+0084 1851      00247                 btfsc   DISPLAY_RESULT_1,0
+0085 1406      00248                 bsf     PORTB,0
+0086 20C7      00249                 call    INTENSITY_DELAY
+0087 0186      00250                 clrf    PORTB
+0088 18D1      00251                 btfsc   DISPLAY_RESULT_1,1
+0089 1486      00252                 bsf     PORTB,1
+008A 20C7      00253                 call    INTENSITY_DELAY
+008B 0186      00254                 clrf    PORTB
+008C 1951      00255                 btfsc   DISPLAY_RESULT_1,2
+008D 1506      00256                 bsf     PORTB,2
+008E 20C7      00257                 call    INTENSITY_DELAY
+008F 0186      00258                 clrf    PORTB
+0090 19D1      00259                 btfsc   DISPLAY_RESULT_1,3
+0091 1586      00260                 bsf     PORTB,3
+0092 20C7      00261                 call    INTENSITY_DELAY
+0093 0186      00262                 clrf    PORTB
+0094 1A51      00263                 btfsc   DISPLAY_RESULT_1,4
+0095 1606      00264                 bsf     PORTB,4
+0096 20C7      00265                 call    INTENSITY_DELAY
+gpasm-0.13.3 beta               adc_display_bargraf_no_resistor_no_transistor_external_20mhz_serial_IO.asm5-22-2009  21:03:16          PAGE  7
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+ 
+0097 0186      00266                 clrf    PORTB
+0098 1AD1      00267                 btfsc   DISPLAY_RESULT_1,5
+0099 1686      00268                 bsf     PORTB,5
+009A 20C7      00269                 call    INTENSITY_DELAY
+009B 0186      00270                 clrf    PORTB
+009C 1B51      00271                 btfsc   DISPLAY_RESULT_1,6
+009D 1706      00272                 bsf     PORTB,6
+009E 20C7      00273                 call    INTENSITY_DELAY
+009F 0186      00274                 clrf    PORTB
+00A0 1BD1      00275                 btfsc   DISPLAY_RESULT_1,7
+00A1 1786      00276                 bsf     PORTB,7
+00A2 20C7      00277                 call    INTENSITY_DELAY
+00A3 0186      00278                 clrf    PORTB
+               00279 
+00A4 1405      00280                 bsf     PORTA,RA0       ; less significant byte off
+00A5 1185      00281                 bcf     PORTA,RA3       ; more significant byte on
+               00282 
+               00283                                         ; same simple magic - check bit in display result, and switch on same bit of PORTB
+               00284                                         ;calling intensity delay, then clear, and so on
+00A6 1852      00285                 btfsc   DISPLAY_RESULT_2,0
+00A7 1406      00286                 bsf     PORTB,0
+00A8 20C7      00287                 call    INTENSITY_DELAY
+00A9 0186      00288                 clrf    PORTB
+00AA 18D2      00289                 btfsc   DISPLAY_RESULT_2,1
+00AB 1486      00290                 bsf     PORTB,1
+00AC 20C7      00291                 call    INTENSITY_DELAY
+00AD 0186      00292                 clrf    PORTB
+00AE 1952      00293                 btfsc   DISPLAY_RESULT_2,2
+00AF 1506      00294                 bsf     PORTB,2
+00B0 20C7      00295                 call    INTENSITY_DELAY
+00B1 0186      00296                 clrf    PORTB
+00B2 19D2      00297                 btfsc   DISPLAY_RESULT_2,3
+00B3 1586      00298                 bsf     PORTB,3
+00B4 20C7      00299                 call    INTENSITY_DELAY
+00B5 0186      00300                 clrf    PORTB
+00B6 1A52      00301                 btfsc   DISPLAY_RESULT_2,4
+00B7 1606      00302                 bsf     PORTB,4
+00B8 20C7      00303                 call    INTENSITY_DELAY
+00B9 0186      00304                 clrf    PORTB
+00BA 1AD2      00305                 btfsc   DISPLAY_RESULT_2,5
+00BB 1686      00306                 bsf     PORTB,5
+00BC 20C7      00307                 call    INTENSITY_DELAY
+00BD 0186      00308                 clrf    PORTB
+00BE 1B52      00309                 btfsc   DISPLAY_RESULT_2,6
+00BF 1706      00310                 bsf     PORTB,6
+00C0 20C7      00311                 call    INTENSITY_DELAY
+00C1 0186      00312                 clrf    PORTB
+00C2 1BD2      00313                 btfsc   DISPLAY_RESULT_2,7
+00C3 1786      00314                 bsf     PORTB,7
+00C4 20C7      00315                 call    INTENSITY_DELAY
+00C5 0186      00316                 clrf    PORTB
+               00317 
+00C6 0008      00318                 return 
+               00319 
+gpasm-0.13.3 beta               adc_display_bargraf_no_resistor_no_transistor_external_20mhz_serial_IO.asm5-22-2009  21:03:16          PAGE  8
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+ 
+               00320 
+00C7           00321 INTENSITY_DELAY:
+               00322 
+00C7 0000      00323                 nop
+00C8 0000      00324                 nop
+               00325 
+00C9 0008      00326                 return
+               00327 
+               00328 ; ------------------thiiiis is theory
+               00329 
+               00330 ;INTENSITY_DELAY
+               00331                 bank1
+00CA 1683          M                 bsf     STATUS,RP0
+Message [302] : Register in operand not in bank 0. Ensure bank bits are correct.
+00CB 1605      00332                 bsf     TRISA,RA4               ; tristate RA4 pin - capacitor starts charging
+Message [302] : Register in operand not in bank 0. Ensure bank bits are correct.
+00CC 1685      00333                 bsf     TRISA,RA5               ; tristate RA5 pin. it is tristate anyway, but let's make it input 
+               00334                 bank0                           ; switch back to bank0 
+00CD 1283          M                 bcf     STATUS,RP0
+00CE           00335 INTENSITY_DELAY1:
+00CE 1E05      00336                 btfss   PORTA,RA4               ; check if delay capacitor got charged, skip if yes
+00CF 28CE      00337                 goto    INTENSITY_DELAY1        ; if no, just wait for it to happen. 
+               00338 
+               00339                 bank1                           ; when done switch back to bank1
+00D0 1683          M                 bsf     STATUS,RP0
+Message [302] : Register in operand not in bank 0. Ensure bank bits are correct.
+00D1 1205      00340                 bcf     TRISA,RA4               ; set RA4 as output again, this will discharge capacitor
+               00341                 bank0
+00D2 1283          M                 bcf     STATUS,RP0
+00D3 0008      00342                 return
+               00343 
+               00344 
+               00345 
+               00346 
+               00347 
+               00348 
+               00349 ;           Comparator Interrupt Service routine
+               00350 
+00D4           00351 COMP:           bank0
+00D4 1283          M                 bcf     STATUS,RP0
+00D5 1010      00352                 bcf T1CON,TMR1ON ; Stop Timer 1
+00D6 130C      00353                 bcf PIR1,CMIF    ; Clear Interrupt flag
+00D7 0000      00354                 nop
+00D8 100C      00355                 bcf PIR1,TMR1IF
+               00356                 bank1
+00D9 1683          M                 bsf     STATUS,RP0
+Message [302] : Register in operand not in bank 0. Ensure bank bits are correct.
+00DA 130C      00357                 bcf PIE1,CMIE    ; Mask Comparator Int
+00DB 0000      00358                 nop
+Message [302] : Register in operand not in bank 0. Ensure bank bits are correct.
+00DC 100C      00359                 bcf PIE1,TMR1IE
+00DD 0009      00360                 retfie 
+gpasm-0.13.3 beta               adc_display_bargraf_no_resistor_no_transistor_external_20mhz_serial_IO.asm5-22-2009  21:03:16          PAGE  9
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+ADEN                              00000003
+BARGRAF_DISPLAY                   00000031
+BIT_3_NOT                         00000073
+BIT_4_NOT                         0000006E
+BIT_5_NOT                         00000066
+BIT_6_NOT                         00000058
+BIT_7_NOT                         0000003E
+BRGH                              00000002
+C                                 00000000
+C1INV                             00000004
+C1OUT                             00000006
+C2INV                             00000005
+C2OUT                             00000007
+CCP1CON                           00000017
+CCP1IE                            00000002
+CCP1IF                            00000002
+CCP1M0                            00000000
+CCP1M1                            00000001
+CCP1M2                            00000002
+CCP1M3                            00000003
+CCP1X                             00000005
+CCP1Y                             00000004
+CCPR1H                            00000016
+CCPR1L                            00000015
+CIS                               00000003
+CM0                               00000000
+CM1                               00000001
+CM2                               00000002
+CMCON                             0000001F
+CMIE                              00000006
+CMIF                              00000006
+COMP                              000000D4
+CONVERT                           00000013
+CREN                              00000004
+CSRC                              00000007
+DC                                00000001
+DISCHARGE_COMPARATOR_CAP          00000019
+DISPLAY_RESULT_1                  00000051
+DISPLAY_RESULT_2                  00000052
+DISPLAY_RESULT_3                  00000053
+DISPLAY_TEMP1                     00000050
+EEADR                             0000009B
+EECON1                            0000009C
+EECON2                            0000009D
+EEDATA                            0000009A
+EEIE                              00000007
+EEIF                              00000007
+F                                 00000001
+FERR                              00000002
+FSR                               00000004
+GETDATA                           0000002F
+GIE                               00000007
+INDF                              00000000
+gpasm-0.13.3 beta               adc_display_bargraf_no_resistor_no_transistor_external_20mhz_serial_IO.asm5-22-2009  21:03:16          PAGE 10
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+ 
+INIT                              00000005
+INTCON                            0000000B
+INTE                              00000004
+INTEDG                            00000006
+INTENSITY_DELAY                   000000C7
+INTENSITY_DELAY1                  000000CE
+INTF                              00000001
+IRP                               00000007
+MAIN                              00000010
+NOT_BO                            00000000
+NOT_BOD                           00000000
+NOT_BOR                           00000000
+NOT_PD                            00000003
+NOT_POR                           00000001
+NOT_RBPU                          00000007
+NOT_T1SYNC                        00000002
+NOT_TO                            00000004
+OERR                              00000001
+OPTION_REG                        00000081
+OSCF                              00000003
+PCL                               00000002
+PCLATH                            0000000A
+PCON                              0000008E
+PEIE                              00000006
+PIE1                              0000008C
+PIR1                              0000000C
+PORTA                             00000005
+PORTB                             00000006
+PR2                               00000092
+PS0                               00000000
+PS1                               00000001
+PS2                               00000002
+PSA                               00000003
+RA0                               00000000
+RA1                               00000001
+RA2                               00000002
+RA3                               00000003
+RA4                               00000004
+RA5                               00000005
+RA6                               00000006
+RA7                               00000007
+RB0                               00000000
+RB1                               00000001
+RB2                               00000002
+RB3                               00000003
+RB4                               00000004
+RB5                               00000005
+RB6                               00000006
+RB7                               00000007
+RBIE                              00000003
+RBIF                              00000000
+RCIE                              00000005
+RCIF                              00000005
+RCREG                             0000001A
+gpasm-0.13.3 beta               adc_display_bargraf_no_resistor_no_transistor_external_20mhz_serial_IO.asm5-22-2009  21:03:16          PAGE 11
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+ 
+RCSTA                             00000018
+RD                                00000000
+RP0                               00000005
+RP1                               00000006
+RX9                               00000006
+RX9D                              00000000
+SPBRG                             00000099
+SPEN                              00000007
+SREN                              00000005
+STATUS                            00000003
+SYNC                              00000004
+T0CS                              00000005
+T0IE                              00000005
+T0IF                              00000002
+T0SE                              00000004
+T1CKPS0                           00000004
+T1CKPS1                           00000005
+T1CON                             00000010
+T1OSCEN                           00000003
+T2CKPS0                           00000000
+T2CKPS1                           00000001
+T2CON                             00000012
+TMR0                              00000001
+TMR1CS                            00000001
+TMR1H                             0000000F
+TMR1IE                            00000000
+TMR1IF                            00000000
+TMR1L                             0000000E
+TMR1ON                            00000000
+TMR2                              00000011
+TMR2IE                            00000001
+TMR2IF                            00000001
+TMR2ON                            00000002
+TOUTPS0                           00000003
+TOUTPS1                           00000004
+TOUTPS2                           00000005
+TOUTPS3                           00000006
+TRISA                             00000085
+TRISB                             00000086
+TRMT                              00000001
+TX9                               00000006
+TX9D                              00000000
+TXEN                              00000005
+TXIE                              00000004
+TXIF                              00000004
+TXREG                             00000019
+TXSTA                             00000098
+VR0                               00000000
+VR1                               00000001
+VR2                               00000002
+VR3                               00000003
+VRCON                             0000009F
+VREN                              00000007
+VROE                              00000006
+gpasm-0.13.3 beta               adc_display_bargraf_no_resistor_no_transistor_external_20mhz_serial_IO.asm5-22-2009  21:03:16          PAGE 12
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+ 
+VRR                               00000005
+W                                 00000000
+WAIT                              0000002C
+WR                                00000001
+WREN                              00000002
+WRERR                             00000003
+Z                                 00000002
+_BODEN_OFF                        00003FBF
+_BODEN_ON                         00003FFF
+_CP_50                            00002BFF
+_CP_75                            000017FF
+_CP_ALL                           000003FF
+_CP_OFF                           00003FFF
+_DATA_CP_OFF                      00003FFF
+_DATA_CP_ON                       00003EFF
+_ER_OSC_CLKOUT                    00003FFF
+_ER_OSC_NOCLKOUT                  00003FFE
+_EXTCLK_OSC                       00003FEF
+_HS_OSC                           00003FEE
+_INTRC_OSC_CLKOUT                 00003FFD
+_INTRC_OSC_NOCLKOUT               00003FFC
+_LP_OSC                           00003FEC
+_LVP_OFF                          00003F7F
+_LVP_ON                           00003FFF
+_MCLRE_OFF                        00003FDF
+_MCLRE_ON                         00003FFF
+_PWRTE_OFF                        00003FFF
+_PWRTE_ON                         00003FF7
+_WDT_OFF                          00003FFB
+_WDT_ON                           00003FFF
+_XT_OSC                           00003FED
+__16F627                          00000001
+
+
+MEMORY USAGE MAP ('X' = Used,  '-' = Unused)
+
+00000000 : X---XXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+00000040 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+00000080 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+000000c0 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXX-- ---------------- ----------------
+00002000 : -------X-------- ---------------- ---------------- ----------------
+
+All other memory blocks unused.
+
+Program Memory Words Used: 220
+
+
+Errors   :       0
+Warnings :       0 reported,       0 suppressed
+Messages :      46 reported,       0 suppressed
+

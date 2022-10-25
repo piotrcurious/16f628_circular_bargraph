@@ -1,0 +1,1284 @@
+gpasm-0.13.7 beta               RA5_zeroed_display_20mhz.asm5-20-2011  22:03:45          PAGE  1
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+ 
+               00001 ; this is somewhat slower implementation of 16bit ADC + LED bar display. 
+               00002 ; instead of turning all LEDs at once, it pulses each LED for a predefined period of time.
+               00003 ; this allows to use just one resistor , and as current flows via max one LED at a time, this allows aswell to get rid of 
+               00004 ; external transistor. only required elements are two resistors, which are not really nessesary if one assumes that 
+               00005 ; pulse current will be so short that no damage will happen to either LEDs or PIC transistors. 
+               00006 
+               00007 ; TODO : implement WDT to powerdown mode etc.
+               00008 ; RA4 is OC type, and the code measures how long it takes for it to return to 1 after 0'ing. 
+               00009 ; connecting _small_ capacitor and large potentiometer is recommended if you want intensity knob.
+               00010 ; if you want to save parts - just put a pullup resistor of i.e. 1mohm , 100kohm, etc can be used. 
+               00011 ; as meter will wait to infinity if there is no 1 on the pin, it can be also used for powerdown mode. 
+               00012 ;
+               00013 ; RA5 should be pulled up by weak resistor , and equipped with switch to 0 . 
+               00014 ; i made this using intensity delay pot - on 1.3v of PCB it is connected via 4.7K resistor to 5V, 
+               00015 ; so RA5 got connected to the resistor. when pot is turned to 0 , RA5 gets to 0 aswell, as long as 
+               00016 ; RA4 is still down.
+               00017 ; RA5 is now used to set '0'  
+               00018 ;
+               00019 
+               00020 LIST            P=PIC16F627
+               00021 #INCLUDE        "p16f627.inc"
+               00001         LIST
+               00002 ; P16F627.INC  Standard Header File, Version 1.01    Microchip Technology, Inc.
+               00261         LIST
+               00022 ERRORLEVEL      -302
+               00023 ;        __CONFIG        _BODEN_ON & _CP_OFF & _DATA_CP_OFF & _PWRTE_ON & _WDT_OFF & _LVP_OFF & _MCLRE_OFF & _INTRC_OSC_NOCLKOUT
+002007 3F42    00024         __CONFIG        _BODEN_ON & _CP_OFF & _DATA_CP_OFF & _PWRTE_ON & _WDT_OFF & _LVP_OFF & _MCLRE_OFF & _HS_OSC
+               00025 
+               00026 bank0           macro
+               00027                 bcf     STATUS,RP0
+               00028                 endm
+               00029 bank1           macro
+               00030                 bsf     STATUS,RP0
+               00031                 endm
+               00032 
+  00000050     00033 DISPLAY_TEMP1   equ   0x50
+  00000051     00034 DISPLAY_RESULT_1        equ   0x51
+  00000052     00035 DISPLAY_RESULT_2        equ   0x52
+  00000053     00036 DISPLAY_RESULT_3        equ   0x53
+  00000054     00037 DISPLAY_RESULT_4        equ   0x54
+  00000055     00038 INTENSITY_KNOB          equ     0x55
+  00000056     00039 DELAY                   equ     0x56
+  00000057     00040 DELAY2                  equ     0x57
+  00000058     00041 COMPARATOR_DISCHARGE_TIME       equ 0x58
+  00000059     00042 COMPARATOR_DISCHARGE_TIME2      equ 0x59
+  00000060     00043 INTERRUPT_STATUS        equ     0x60
+  00000061     00044 SUBTRACTION_REGISTER1 equ 0x61
+  00000062     00045 SUBTRACTION_REGISTER2 equ 0x62
+  00000063     00046 ZERO_2                  equ     0x63
+  00000064     00047 ZERO_1                  equ     0x64
+  00000000     00048 RA0             equ 0x00
+  00000001     00049 RA1             equ 0x01
+  00000002     00050 RA2             equ 0x02
+  00000003     00051 RA3             equ 0x03
+gpasm-0.13.7 beta               RA5_zeroed_display_20mhz.asm5-20-2011  22:03:45          PAGE  2
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+ 
+  00000004     00052 RA4             equ 0x04
+  00000005     00053 RA5             equ 0x05
+  00000006     00054 RA6             equ 0x06
+  00000007     00055 RA7             equ 0x07
+               00056 
+  00000000     00057 RB0             equ 0x00
+  00000001     00058 RB1             equ 0x01
+  00000002     00059 RB2             equ 0x02
+  00000003     00060 RB3             equ 0x03
+  00000004     00061 RB4             equ 0x04
+  00000005     00062 RB5             equ 0x05
+  00000006     00063 RB6             equ 0x06
+  00000007     00064 RB7             equ 0x07
+               00065 
+0000           00066                 org 0            ; Reset Vector
+0000 2805      00067                 goto INIT
+               00068 
+0004           00069                 org 4            ; Interrupt Vector
+0004 29E2      00070                 goto COMP
+0005           00071                 org 5
+               00072 
+0005 00073 INIT:           bank0
+0005 1283          M                 bcf     STATUS,RP0
+               00074 ;               movlw b'00001101'      ; zwei komparatoren
+0006 3005      00075                 movlw b'00000101'       ; one comparator 
+0007 009F      00076                 movwf CMCON
+               00077 ;               movlw H'14'      ; 
+0008 3004      00078                 movlw b'00000100'      ; Timer 1:
+               00079                                         ; 0 - TMR1ON - 0(off)
+               00080                                         ; 1 - TMR1CS - 0(off) 
+               00081                                         ; 2 - /T1SYNC - 1(off)
+               00082                                         ; 3 - T1OSCEN - 0(off)
+               00083 
+               00084                                         ; 4 - T1CKPS0 - 0 
+               00085                                         ; 5 - T1CKPS1 - 0 ; 1:1 prescaler
+               00086                                         ; 6 - - 0 
+               00087                                         ; 7 - - 0 
+               00088 
+0009 0090      00089                 movwf T1CON      ; A 1 MHz clock is used
+000A 0185      00090                 clrf PORTA
+000B 0186      00091                 clrf PORTB
+               00092                 bank1
+000C 1683          M                 bsf     STATUS,RP0
+000D 0186      00093                 clrf TRISB
+               00094 ;               movlw H'CF'      ; Enable Vref = 3.6v
+               00095 ;               movwf VRCON
+000E 178B      00096                 bsf INTCON,GIE   ; Enable Global Int
+000F 170B      00097                 bsf INTCON,PEIE  ; Unmask Peripheral Int
+               00098 
+               00099         
+0010 00100 MAIN:
+0010 207C      00101                 call DISCHARGE_COMPARATOR_CAPACITOR
+0011 208B      00102                 call CONVERT
+0012 2059      00103                 call COMPENSATE_RESULT
+gpasm-0.13.7 beta               RA5_zeroed_display_20mhz.asm5-20-2011  22:03:45          PAGE  3
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+ 
+               00104                 
+0013 3000      00105                 movlw   0x00
+0014 020F      00106                 subwf   TMR1H,W
+0015 1903      00107                 btfsc   STATUS,Z
+0016 2819      00108                 goto    DISPLAY_LOW
+               00109 
+0017 080F      00110                 movfw   TMR1H
+0018 20A1      00111                 call    BARGRAF_DISPLAY_W
+0019 00112 DISPLAY_LOW:
+0019 3000      00113                 movlw   0x00
+001A 020F      00114                 subwf   TMR1H,W
+001B 1D03      00115                 btfss   STATUS,Z
+001C 281F      00116                 goto    DISPLAY_HIGH
+               00117 
+001D 080E      00118                 movfw   TMR1L
+001E 20A1      00119                 call    BARGRAF_DISPLAY_W
+001F 00120 DISPLAY_HIGH:
+               00121 
+               00122 
+001F 2021      00123                 call ASK_USER_IF_ZERO
+               00124 
+0020 2810      00125                 goto    MAIN
+               00126 
+0021 00127 ASK_USER_IF_ZERO
+               00128                 bank1
+0021 1683          M                 bsf     STATUS,RP0
+0022 1685      00129                 bsf     TRISA,RA5               ; tristate RA5 pin. it is tristate anyway, but let's make it input 
+               00130                 bank0           
+0023 1283          M                 bcf     STATUS,RP0
+0024 1A85      00131                 btfsc   PORTA,RA5
+0025 0008      00132                 return                  ;user did not press button - return
+               00133                         ;RA5 pressed , zero calibration
+0026 207C      00134                 call    DISCHARGE_COMPARATOR_CAPACITOR
+0027 208B      00135                 call    CONVERT
+               00136 
+               00137                 bank1
+0028 1683          M                 bsf     STATUS,RP0
+0029 138B      00138                 bcf     INTCON,GIE
+               00139 
+002A 3000      00140                 movlw   0x00
+002B 009B      00141                 movwf   EEADR ; write ZERO_2 to 0x00 @ eeprom
+               00142                 bank0 
+002C 1283          M                 bcf     STATUS,RP0
+002D 080F      00143                 movfw   TMR1H
+               00144                 bank1
+002E 1683          M                 bsf     STATUS,RP0
+002F 009A      00145                 movwf   EEDATA
+0030 151C      00146                 bsf     EECON1,WREN
+0031 3055      00147                 movlw   0x55
+0032 009D      00148                 movwf   EECON2
+0033 30AA      00149                 movlw   0xaa
+0034 009D      00150                 movwf   EECON2
+0035 149C      00151                 bsf     EECON1,WR
+               00152                 
+gpasm-0.13.7 beta               RA5_zeroed_display_20mhz.asm5-20-2011  22:03:45          PAGE  4
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+ 
+0036 00153 ZERO_2_WRITE:
+0036 189C      00154                 btfsc   EECON1,WR
+0037 2836      00155                 goto    ZERO_2_WRITE
+               00156                 bank0
+0038 1283          M                 bcf     STATUS,RP0
+0039 138C      00157                 bcf     PIR1,EEIF
+               00158 
+               00159                 bank1
+003A 1683          M                 bsf     STATUS,RP0
+003B 3001      00160                 movlw   0x01
+003C 009B      00161                 movwf   EEADR ; write ZERO_1 to 0x01 @ eeprom
+               00162                 bank0 
+003D 1283          M                 bcf     STATUS,RP0
+003E 080E      00163                 movfw   TMR1L
+               00164                 bank1
+003F 1683          M                 bsf     STATUS,RP0
+0040 009A      00165                 movwf   EEDATA
+0041 151C      00166                 bsf     EECON1,WREN
+0042 3055      00167                 movlw   0x55
+0043 009D      00168                 movwf   EECON2
+0044 30AA      00169                 movlw   0xAA
+0045 009D      00170                 movwf   EECON2
+0046 149C      00171                 bsf     EECON1,WR
+               00172                 
+               00173         
+0047 00174 ZERO_1_WRITE:
+0047 189C      00175                 btfsc   EECON1,WR
+0048 2847      00176                 goto    ZERO_1_WRITE
+               00177 
+               00178                 bank1
+0049 1683          M                 bsf     STATUS,RP0
+004A 138C      00179                 bcf     PIR1,EEIF
+               00180                 
+               00181                 
+               00182                 bank1
+004B 1683          M                 bsf     STATUS,RP0
+004C 111C      00183                 bcf     EECON1,WREN
+004D 178B      00184                 bsf     INTCON,GIE
+               00185 
+               00186                 bank0
+004E 1283          M                 bcf     STATUS,RP0
+004F 1486      00187                 bsf     PORTB,RB1
+               00188 
+0050 00189 USER_HOLDS_KEY:
+0050 1585      00190                 bsf     PORTA,RA3
+Message [305] : Using default destination of 1 (file).
+0051 0C86      00191                 rrf     PORTB
+0052 0806      00192                 movfw   PORTB
+0053 21D3      00193                 call    INTENSITY_DELAY
+0054 1A85      00194                 btfsc   PORTA,RA5
+0055 2850      00195                 goto    USER_HOLDS_KEY
+0056 1185      00196                 bcf     PORTA,RA3
+0057 0186      00197                 clrf    PORTB           
+0058 0008      00198                 return
+gpasm-0.13.7 beta               RA5_zeroed_display_20mhz.asm5-20-2011  22:03:45          PAGE  5
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+ 
+               00199 
+               00200 
+0059 00201 COMPENSATE_RESULT:
+               00202                 ; compensation for 20mhz clock :
+               00203 
+               00204                 bank1           
+0059 1683          M                 bsf     STATUS,RP0
+005A 3000      00205                 movlw   0x00
+005B 009B      00206                 movwf   EEADR  ; read 0x00 byte from EEPROM = ZERO_2            
+005C 141C      00207                 bsf     EECON1,RD
+005D 081A      00208                 movfw   EEDATA
+               00209                 bank0
+005E 1283          M                 bcf     STATUS,RP0
+005F 00E2      00210                 movwf   SUBTRACTION_REGISTER2           
+               00211 
+               00212                 bank1
+0060 1683          M                 bsf     STATUS,RP0
+0061 3001      00213                 movlw   0x01
+0062 009B      00214                 movwf   EEADR  ; read 0x01 byte from EEPROM = ZERO_1            
+0063 141C      00215                 bsf     EECON1,RD
+0064 081A      00216                 movfw   EEDATA
+               00217                 bank0
+0065 1283          M                 bcf     STATUS,RP0
+0066 00E1      00218                 movwf   SUBTRACTION_REGISTER1
+               00219 
+0067 0861      00220                 movf    SUBTRACTION_REGISTER1,W
+Message [305] : Using default destination of 1 (file).
+0068 028E      00221                 subwf   TMR1L
+0069 0862      00222                 movf    SUBTRACTION_REGISTER2,W
+006A 1C03      00223                 btfss   STATUS,C
+006B 0F62      00224                 incfsz  SUBTRACTION_REGISTER2,W
+Message [305] : Using default destination of 1 (file).
+006C 028F      00225                 subwf   TMR1H
+               00226 ;               btfsc   STATUS,C
+006D 0008      00227                 return
+006E 018F      00228                 clrf    TMR1H
+006F 018E      00229                 clrf    TMR1L
+0070 0008      00230                 return
+               00231 
+0071 00232 DISCHARGE_COMPARATOR_CAP:
+               00233                 bank1            ; 
+0071 1683          M                 bsf     STATUS,RP0
+0072 1085      00234                 bcf TRISA,1      ; Set RA1 as output
+               00235                 bank0
+0073 1283          M                 bcf     STATUS,RP0
+0074 1085      00236                 bcf PORTA,1      ; Discharge capacitor
+0075 0000      00237                 nop             ; wait 
+               00238 
+               00239                 bank1           
+0076 1683          M                 bsf     STATUS,RP0
+0077 1485      00240                 bsf     TRISA,1  ; make RA1 input
+               00241                 bank0           ; switch back to bank0 . 
+0078 1283          M                 bcf     STATUS,RP0
+0079 1885      00242                 btfsc   PORTA,1  ;  make sure capacitor got discharged 
+gpasm-0.13.7 beta               RA5_zeroed_display_20mhz.asm5-20-2011  22:03:45          PAGE  6
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+ 
+007A 2871      00243                 goto    DISCHARGE_COMPARATOR_CAP ; if not, go back discharging it. 
+007B 0008      00244                 return 
+               00245 
+007C 00246 DISCHARGE_COMPARATOR_CAPACITOR:
+007C 2071      00247                 call    DISCHARGE_COMPARATOR_CAP
+               00248                 bank1 
+007D 1683          M                 bsf     STATUS,RP0
+007E 1085      00249                 bcf     TRISA,RA1 
+007F 0000      00250                 nop
+               00251 ;               bcf     TRISA,RA2
+               00252                 bank0 
+0080 1283          M                 bcf     STATUS,RP0
+0081 1085      00253                 bcf     PORTA,RA1
+0082 0000      00254                 nop
+               00255 ;               bcf     PORTA,RA2
+               00256                 
+               00257 ;               clrf    COMPARATOR_DISCHARGE_TIME2
+0083 3010      00258                 movlw   0x10
+0084 00D9      00259                 movwf   COMPARATOR_DISCHARGE_TIME2
+               00260         
+0085 00261 DISCHARGE_COMPARATOR2
+               00262 
+0085 01D8      00263                 clrf    COMPARATOR_DISCHARGE_TIME
+               00264 
+0086 00265 DISCHARGE_COMPARATOR
+Message [305] : Using default destination of 1 (file).
+0086 0BD8      00266                 decfsz  COMPARATOR_DISCHARGE_TIME
+0087 2886      00267                 goto    DISCHARGE_COMPARATOR
+Message [305] : Using default destination of 1 (file).
+0088 0BD9      00268                 decfsz  COMPARATOR_DISCHARGE_TIME2
+0089 2885      00269                 goto    DISCHARGE_COMPARATOR2
+               00270 
+008A 0008      00271                 return
+               00272 
+               00273 ;-------------------------16bit ADC subroutine
+               00274 
+008B 00275 CONVERT:        
+               00276         
+               00277                 bank0
+008B 1283          M                 bcf     STATUS,RP0
+008C 01E0      00278                 clrf    INTERRUPT_STATUS 
+008D 018E      00279                 clrf TMR1L       ; Clear Timer 1 L
+008E 100C      00280                 bcf PIR1,TMR1IF  ; clear tmr1 int flag
+008F 018F      00281                 clrf TMR1H       ; Clear Timer 1 H
+0090 130C      00282                 bcf PIR1,CMIF    ; Clear comp Int flag
+               00283 
+               00284                 bank1
+0091 1683          M                 bsf     STATUS,RP0
+0092 170C      00285                 bsf PIE1,CMIE    ; Unmask Comp Int
+0093 1505      00286                 bsf     TRISA,RA2  ; set RA2 as input
+0094 140C      00287                 bsf PIE1,TMR1IE  ;unmask TMR1 interrupt 
+               00288                 bank0
+0095 1283          M                 bcf     STATUS,RP0
+               00289 
+gpasm-0.13.7 beta               RA5_zeroed_display_20mhz.asm5-20-2011  22:03:45          PAGE  7
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+ 
+0096 1410      00290                 bsf T1CON,TMR1ON ; Start Timer 1 
+0097 089F      00291                 movf CMCON,f     ; Read to sync output
+               00292                 bank1           ; 4 cycles
+0098 1683          M                 bsf     STATUS,RP0
+0099 1485      00293                 bsf     TRISA,RA1 ; start charging cap - 8 cycles
+               00294                  
+009A 00295 WAIT:           
+009A 1B0C      00296                 btfsc PIE1,CMIE  ; Wait for int to clean PIE1 (bank1)
+               00297 ;               btfss PIR1,CMIF                         
+               00298 ;               btfss   INTERRUPT_STATUS,0      ; bank0 
+009B 289A      00299                 goto WAIT        
+               00300                                 ; 
+009C 00301 GETDATA:                        ; Timer 1 contains
+               00302                                 ; DATA (TMR1L TMR1H)
+               00303                 bank1            ; 
+009C 1683          M                 bsf     STATUS,RP0
+009D 1085      00304                 bcf TRISA,1      ; Set RA1 as output
+               00305                 bank0
+009E 1283          M                 bcf     STATUS,RP0
+009F 1085      00306                 bcf PORTA,1      ; Discharge capacitor
+00A0 0008      00307                 return
+               00308 
+               00309 ;-------------------------simple bargraf display subroutine
+               00310 
+               00311 
+               00312                 
+               00313 
+00A1 00314 BARGRAF_DISPLAY_W:
+               00315                 bank0
+00A1 1283          M                 bcf     STATUS,RP0
+               00316 ;               movfw   TMR1H           ;we get only most significiant byte
+               00317 ;               movfw   TMR1L           ;we get only least significiant byte (for quick testing)
+               00318 ;               movfw   COMPARATOR_DISCHARGE_TIME ; display how long it took to discharge comparator capacitor                                  
+               00319 ;               andlw   b'11111000'     ;and most significiant nibble - this filtering is obsolete
+               00320 
+               00321                                         
+00A2 00D0      00322                 movwf   DISPLAY_TEMP1   ;bit testing cannot operate on W
+               00323 
+               00324 ;               bcf     STATUS,C
+               00325 ;               rlf     DISPLAY_TEMP1
+               00326 ;               bcf     STATUS,C
+               00327 ;               rlf     DISPLAY_TEMP1
+               00328 ;               bcf     STATUS,C
+               00329 ;               rlf     DISPLAY_TEMP1 ; debug - show three bits which would usually contain just 
+               00330                                         ;error - 0-15 , 8 cycles for TMR1 to start counting 
+               00331                                         ; + 8 for interrupts to stop timer
+               00332 
+               00333                 ; RA4 has significant capacitance. let's initalise line select pins first then. 
+               00334                 bank1
+00A3 1683          M                 bsf     STATUS,RP0
+00A4 0186      00335                 clrf    TRISB ; we use PORTB configured as output for that
+00A5 1205      00336                 bcf     TRISA,RA4 ; as PORTB is 8 bit, RA4 will select 3rd significant LED strip
+               00337                                         ; IT REQUIRES PULL-UP POTENTIOMETER
+00A6 0000      00338                 nop
+gpasm-0.13.7 beta               RA5_zeroed_display_20mhz.asm5-20-2011  22:03:45          PAGE  8
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+ 
+00A7 1185      00339                 bcf     TRISA,RA3 ; as PORTB is 8 BIT, RA3 will select 2nd significant LED strip
+00A8 0000      00340                 nop
+00A9 1005      00341                 bcf     TRISA,RA0 ; as PORTB is 8 bit, RA0 will select 1st significant LED strip. 
+               00342                 bank0 
+00AA 1283          M                 bcf     STATUS,RP0
+00AB 0186      00343                 clrf    PORTB ; switch off all LEDS .
+               00344                                 ;1 used as output 'on' state
+00AC 1205      00345                 bcf     PORTA,RA4 ; RA4 is used for intensity delay routine. resetting . 
+               00346                                 ; IT REQUIRES PULL UP AND CAPACITOR!
+00AD 0000      00347                 nop
+00AE 1585      00348                 bsf     PORTA,RA3 ; 2nd significant bar is off (LED cathodes connect to RA3 via resistor) 
+00AF 0000      00349                 nop
+00B0 1405      00350                 bsf     PORTA,RA0 ; 1st significant bar is off (LED cathodes connect to RA0 via resistor). 
+00B1 0000      00351                 nop 
+               00352 
+               00353 
+               00354                 
+00B2 01D1      00355                 clrf    DISPLAY_RESULT_1   ;we clear last display results
+00B3 01D2      00356                 clrf    DISPLAY_RESULT_2  
+00B4 01D3      00357                 clrf    DISPLAY_RESULT_3                
+00B5 01D4      00358                 clrf    DISPLAY_RESULT_4                
+               00359 
+               00360 
+               00361 
+00B6 1FD0      00362                 btfss   DISPLAY_TEMP1,7 ; if the '16' bit is set
+00B7 2908      00363                 goto    BIT_7_NOT
+               00364                 
+00B8 1403      00365                 bsf     STATUS,C                ; insert 1 16 times. 
+Message [305] : Using default destination of 1 (file).
+00B9 0DD1      00366                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+00BA 0DD2      00367                 rlf     DISPLAY_RESULT_2
+Message [305] : Using default destination of 1 (file).
+00BB 0DD3      00368                 rlf     DISPLAY_RESULT_3
+Message [305] : Using default destination of 1 (file).
+00BC 0DD4      00369                 rlf     DISPLAY_RESULT_4                
+00BD 1403      00370                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+00BE 0DD1      00371                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+00BF 0DD2      00372                 rlf     DISPLAY_RESULT_2
+Message [305] : Using default destination of 1 (file).
+00C0 0DD3      00373                 rlf     DISPLAY_RESULT_3
+Message [305] : Using default destination of 1 (file).
+00C1 0DD4      00374                 rlf     DISPLAY_RESULT_4                
+00C2 1403      00375                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+00C3 0DD1      00376                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+00C4 0DD2      00377                 rlf     DISPLAY_RESULT_2
+Message [305] : Using default destination of 1 (file).
+00C5 0DD3      00378                 rlf     DISPLAY_RESULT_3
+Message [305] : Using default destination of 1 (file).
+00C6 0DD4      00379                 rlf     DISPLAY_RESULT_4                
+gpasm-0.13.7 beta               RA5_zeroed_display_20mhz.asm5-20-2011  22:03:45          PAGE  9
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+ 
+00C7 1403      00380                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+00C8 0DD1      00381                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+00C9 0DD2      00382                 rlf     DISPLAY_RESULT_2
+Message [305] : Using default destination of 1 (file).
+00CA 0DD3      00383                 rlf     DISPLAY_RESULT_3
+Message [305] : Using default destination of 1 (file).
+00CB 0DD4      00384                 rlf     DISPLAY_RESULT_4                
+00CC 1403      00385                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+00CD 0DD1      00386                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+00CE 0DD2      00387                 rlf     DISPLAY_RESULT_2
+Message [305] : Using default destination of 1 (file).
+00CF 0DD3      00388                 rlf     DISPLAY_RESULT_3
+Message [305] : Using default destination of 1 (file).
+00D0 0DD4      00389                 rlf     DISPLAY_RESULT_4                
+00D1 1403      00390                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+00D2 0DD1      00391                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+00D3 0DD2      00392                 rlf     DISPLAY_RESULT_2
+Message [305] : Using default destination of 1 (file).
+00D4 0DD3      00393                 rlf     DISPLAY_RESULT_3
+Message [305] : Using default destination of 1 (file).
+00D5 0DD4      00394                 rlf     DISPLAY_RESULT_4                
+00D6 1403      00395                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+00D7 0DD1      00396                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+00D8 0DD2      00397                 rlf     DISPLAY_RESULT_2
+Message [305] : Using default destination of 1 (file).
+00D9 0DD3      00398                 rlf     DISPLAY_RESULT_3
+Message [305] : Using default destination of 1 (file).
+00DA 0DD4      00399                 rlf     DISPLAY_RESULT_4                
+00DB 1403      00400                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+00DC 0DD1      00401                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+00DD 0DD2      00402                 rlf     DISPLAY_RESULT_2
+Message [305] : Using default destination of 1 (file).
+00DE 0DD3      00403                 rlf     DISPLAY_RESULT_3
+Message [305] : Using default destination of 1 (file).
+00DF 0DD4      00404                 rlf     DISPLAY_RESULT_4                
+00E0 1403      00405                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+00E1 0DD1      00406                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+00E2 0DD2      00407                 rlf     DISPLAY_RESULT_2
+Message [305] : Using default destination of 1 (file).
+00E3 0DD3      00408                 rlf     DISPLAY_RESULT_3
+Message [305] : Using default destination of 1 (file).
+00E4 0DD4      00409                 rlf     DISPLAY_RESULT_4                
+gpasm-0.13.7 beta               RA5_zeroed_display_20mhz.asm5-20-2011  22:03:45          PAGE 10
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+ 
+00E5 1403      00410                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+00E6 0DD1      00411                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+00E7 0DD2      00412                 rlf     DISPLAY_RESULT_2
+Message [305] : Using default destination of 1 (file).
+00E8 0DD3      00413                 rlf     DISPLAY_RESULT_3
+Message [305] : Using default destination of 1 (file).
+00E9 0DD4      00414                 rlf     DISPLAY_RESULT_4                
+00EA 1403      00415                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+00EB 0DD1      00416                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+00EC 0DD2      00417                 rlf     DISPLAY_RESULT_2
+Message [305] : Using default destination of 1 (file).
+00ED 0DD3      00418                 rlf     DISPLAY_RESULT_3
+Message [305] : Using default destination of 1 (file).
+00EE 0DD4      00419                 rlf     DISPLAY_RESULT_4                
+00EF 1403      00420                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+00F0 0DD1      00421                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+00F1 0DD2      00422                 rlf     DISPLAY_RESULT_2
+Message [305] : Using default destination of 1 (file).
+00F2 0DD3      00423                 rlf     DISPLAY_RESULT_3
+Message [305] : Using default destination of 1 (file).
+00F3 0DD4      00424                 rlf     DISPLAY_RESULT_4                
+00F4 1403      00425                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+00F5 0DD1      00426                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+00F6 0DD2      00427                 rlf     DISPLAY_RESULT_2
+Message [305] : Using default destination of 1 (file).
+00F7 0DD3      00428                 rlf     DISPLAY_RESULT_3
+Message [305] : Using default destination of 1 (file).
+00F8 0DD4      00429                 rlf     DISPLAY_RESULT_4                
+00F9 1403      00430                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+00FA 0DD1      00431                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+00FB 0DD2      00432                 rlf     DISPLAY_RESULT_2
+Message [305] : Using default destination of 1 (file).
+00FC 0DD3      00433                 rlf     DISPLAY_RESULT_3
+Message [305] : Using default destination of 1 (file).
+00FD 0DD4      00434                 rlf     DISPLAY_RESULT_4                
+00FE 1403      00435                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+00FF 0DD1      00436                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+0100 0DD2      00437                 rlf     DISPLAY_RESULT_2
+Message [305] : Using default destination of 1 (file).
+0101 0DD3      00438                 rlf     DISPLAY_RESULT_3
+Message [305] : Using default destination of 1 (file).
+0102 0DD4      00439                 rlf     DISPLAY_RESULT_4                
+gpasm-0.13.7 beta               RA5_zeroed_display_20mhz.asm5-20-2011  22:03:45          PAGE 11
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+ 
+0103 1403      00440                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+0104 0DD1      00441                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+0105 0DD2      00442                 rlf     DISPLAY_RESULT_2
+Message [305] : Using default destination of 1 (file).
+0106 0DD3      00443                 rlf     DISPLAY_RESULT_3
+Message [305] : Using default destination of 1 (file).
+0107 0DD4      00444                 rlf     DISPLAY_RESULT_4                
+               00445 
+               00446 
+0108 00447 BIT_7_NOT
+0108 1F50      00448                 btfss   DISPLAY_TEMP1,6 ;if the '8' bit is set
+0109 2932      00449                 goto    BIT_6_NOT
+010A 1403      00450                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+010B 0DD1      00451                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+010C 0DD2      00452                 rlf     DISPLAY_RESULT_2
+Message [305] : Using default destination of 1 (file).
+010D 0DD3      00453                 rlf     DISPLAY_RESULT_3
+Message [305] : Using default destination of 1 (file).
+010E 0DD4      00454                 rlf     DISPLAY_RESULT_4                
+010F 1403      00455                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+0110 0DD1      00456                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+0111 0DD2      00457                 rlf     DISPLAY_RESULT_2
+Message [305] : Using default destination of 1 (file).
+0112 0DD3      00458                 rlf     DISPLAY_RESULT_3
+Message [305] : Using default destination of 1 (file).
+0113 0DD4      00459                 rlf     DISPLAY_RESULT_4                
+0114 1403      00460                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+0115 0DD1      00461                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+0116 0DD2      00462                 rlf     DISPLAY_RESULT_2
+Message [305] : Using default destination of 1 (file).
+0117 0DD3      00463                 rlf     DISPLAY_RESULT_3
+Message [305] : Using default destination of 1 (file).
+0118 0DD4      00464                 rlf     DISPLAY_RESULT_4                
+0119 1403      00465                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+011A 0DD1      00466                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+011B 0DD2      00467                 rlf     DISPLAY_RESULT_2
+Message [305] : Using default destination of 1 (file).
+011C 0DD3      00468                 rlf     DISPLAY_RESULT_3
+Message [305] : Using default destination of 1 (file).
+011D 0DD4      00469                 rlf     DISPLAY_RESULT_4                
+011E 1403      00470                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+011F 0DD1      00471                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+gpasm-0.13.7 beta               RA5_zeroed_display_20mhz.asm5-20-2011  22:03:45          PAGE 12
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+ 
+0120 0DD2      00472                 rlf     DISPLAY_RESULT_2
+Message [305] : Using default destination of 1 (file).
+0121 0DD3      00473                 rlf     DISPLAY_RESULT_3
+Message [305] : Using default destination of 1 (file).
+0122 0DD4      00474                 rlf     DISPLAY_RESULT_4                
+0123 1403      00475                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+0124 0DD1      00476                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+0125 0DD2      00477                 rlf     DISPLAY_RESULT_2
+Message [305] : Using default destination of 1 (file).
+0126 0DD3      00478                 rlf     DISPLAY_RESULT_3
+Message [305] : Using default destination of 1 (file).
+0127 0DD4      00479                 rlf     DISPLAY_RESULT_4                
+0128 1403      00480                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+0129 0DD1      00481                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+012A 0DD2      00482                 rlf     DISPLAY_RESULT_2
+Message [305] : Using default destination of 1 (file).
+012B 0DD3      00483                 rlf     DISPLAY_RESULT_3
+Message [305] : Using default destination of 1 (file).
+012C 0DD4      00484                 rlf     DISPLAY_RESULT_4                
+012D 1403      00485                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+012E 0DD1      00486                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+012F 0DD2      00487                 rlf     DISPLAY_RESULT_2
+Message [305] : Using default destination of 1 (file).
+0130 0DD3      00488                 rlf     DISPLAY_RESULT_3
+Message [305] : Using default destination of 1 (file).
+0131 0DD4      00489                 rlf     DISPLAY_RESULT_4                
+               00490                 
+               00491                 
+0132 00492 BIT_6_NOT:
+0132 1ED0      00493                 btfss   DISPLAY_TEMP1,5 ;if the '4' bit is set
+0133 2948      00494                 goto    BIT_5_NOT
+0134 1403      00495                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+0135 0DD1      00496                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+0136 0DD2      00497                 rlf     DISPLAY_RESULT_2
+Message [305] : Using default destination of 1 (file).
+0137 0DD3      00498                 rlf     DISPLAY_RESULT_3
+Message [305] : Using default destination of 1 (file).
+0138 0DD4      00499                 rlf     DISPLAY_RESULT_4                
+0139 1403      00500                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+013A 0DD1      00501                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+013B 0DD2      00502                 rlf     DISPLAY_RESULT_2
+Message [305] : Using default destination of 1 (file).
+013C 0DD3      00503                 rlf     DISPLAY_RESULT_3
+Message [305] : Using default destination of 1 (file).
+gpasm-0.13.7 beta               RA5_zeroed_display_20mhz.asm5-20-2011  22:03:45          PAGE 13
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+ 
+013D 0DD4      00504                 rlf     DISPLAY_RESULT_4                
+013E 1403      00505                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+013F 0DD1      00506                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+0140 0DD2      00507                 rlf     DISPLAY_RESULT_2
+Message [305] : Using default destination of 1 (file).
+0141 0DD3      00508                 rlf     DISPLAY_RESULT_3
+Message [305] : Using default destination of 1 (file).
+0142 0DD4      00509                 rlf     DISPLAY_RESULT_4                
+0143 1403      00510                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+0144 0DD1      00511                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+0145 0DD2      00512                 rlf     DISPLAY_RESULT_2
+Message [305] : Using default destination of 1 (file).
+0146 0DD3      00513                 rlf     DISPLAY_RESULT_3
+Message [305] : Using default destination of 1 (file).
+0147 0DD4      00514                 rlf     DISPLAY_RESULT_4                
+0148 00515 BIT_5_NOT:
+               00516 
+0148 1E50      00517                 btfss   DISPLAY_TEMP1,4 ;if the '2' bit is set
+0149 2954      00518                 goto    BIT_4_NOT
+014A 1403      00519                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+014B 0DD1      00520                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+014C 0DD2      00521                 rlf     DISPLAY_RESULT_2
+Message [305] : Using default destination of 1 (file).
+014D 0DD3      00522                 rlf     DISPLAY_RESULT_3
+Message [305] : Using default destination of 1 (file).
+014E 0DD4      00523                 rlf     DISPLAY_RESULT_4                
+014F 1403      00524                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+0150 0DD1      00525                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+0151 0DD2      00526                 rlf     DISPLAY_RESULT_2
+Message [305] : Using default destination of 1 (file).
+0152 0DD3      00527                 rlf     DISPLAY_RESULT_3
+Message [305] : Using default destination of 1 (file).
+0153 0DD4      00528                 rlf     DISPLAY_RESULT_4                
+0154 00529 BIT_4_NOT:
+               00530 
+0154 1DD0      00531                 btfss   DISPLAY_TEMP1,3 ;if the '1' bit is set
+0155 295B      00532                 goto    BIT_3_NOT
+0156 1403      00533                 bsf     STATUS,C
+Message [305] : Using default destination of 1 (file).
+0157 0DD1      00534                 rlf     DISPLAY_RESULT_1
+Message [305] : Using default destination of 1 (file).
+0158 0DD2      00535                 rlf     DISPLAY_RESULT_2
+Message [305] : Using default destination of 1 (file).
+0159 0DD3      00536                 rlf     DISPLAY_RESULT_3
+Message [305] : Using default destination of 1 (file).
+015A 0DD4      00537                 rlf     DISPLAY_RESULT_4                
+gpasm-0.13.7 beta               RA5_zeroed_display_20mhz.asm5-20-2011  22:03:45          PAGE 14
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+ 
+015B 00538 BIT_3_NOT:
+               00539                 
+               00540 ;-----------------debug-RA4 capacitance , quick hax
+015B 01D5      00541                 clrf    INTENSITY_KNOB
+               00542 
+               00543                 bank0   
+015C 1283          M                 bcf     STATUS,RP0
+015D 1605      00544                 bsf     PORTA,RA4
+               00545                 bank1 
+015E 1683          M                 bsf     STATUS,RP0
+015F 1605      00546                 bsf     TRISA,RA4
+               00547                 bank0   
+0160 1283          M                 bcf     STATUS,RP0
+               00548 
+0161 00549 SET_RA4_HIGH    
+Message [305] : Using default destination of 1 (file).
+0161 03D5      00550                 decf    INTENSITY_KNOB
+0162 1E05      00551                 btfss   PORTA,RA4
+0163 2961      00552                 goto    SET_RA4_HIGH ; go back decreasing INTENSITY_KNOB
+               00553                                         ;INTENSITY_KNOB gets decreased, so shortest time of re-charge
+               00554                                         ; will mean longest delay (intensity) 
+               00555                                         ; if longest time of discharge happens, intensity time is shorter.
+               00556                                         ; this way simple logarhytmic pwm is achieved 
+               00557                 bank1   
+0164 1683          M                 bsf     STATUS,RP0
+0165 1205      00558                 bcf     TRISA,RA4 ; make RA4 out again
+               00559                 bank0
+0166 1283          M                 bcf     STATUS,RP0
+               00560 
+0167 1005      00561                 bcf     PORTA,RA0 ; least significant byte first 
+               00562 
+               00563                                         ;simple magic - check bit in display result, and switch on same bit of PORTB
+               00564                                         ;calling intensity delay, then clear, and so on
+0168 0855      00565                 movfw   INTENSITY_KNOB ; load INTENSITY_KNOB value to w. it's used by INTENSITY DELAY 
+               00566                                         ;not a very ellegant way, but it helps saving one cycle per each delay 
+               00567                                         ;thus reducing shortest possible delay 
+               00568 
+               00569 
+0169 1851      00570                 btfsc   DISPLAY_RESULT_1,0
+016A 1406      00571                 bsf     PORTB,0
+016B 21D3      00572                 call    INTENSITY_DELAY
+016C 0186      00573                 clrf    PORTB
+016D 18D1      00574                 btfsc   DISPLAY_RESULT_1,1
+016E 1486      00575                 bsf     PORTB,1
+016F 21D3      00576                 call    INTENSITY_DELAY
+0170 0186      00577                 clrf    PORTB
+0171 1951      00578                 btfsc   DISPLAY_RESULT_1,2
+0172 1506      00579                 bsf     PORTB,2
+0173 21D3      00580                 call    INTENSITY_DELAY
+0174 0186      00581                 clrf    PORTB
+0175 19D1      00582                 btfsc   DISPLAY_RESULT_1,3
+0176 1586      00583                 bsf     PORTB,3
+0177 21D3      00584                 call    INTENSITY_DELAY
+0178 0186      00585                 clrf    PORTB
+gpasm-0.13.7 beta               RA5_zeroed_display_20mhz.asm5-20-2011  22:03:45          PAGE 15
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+ 
+0179 1A51      00586                 btfsc   DISPLAY_RESULT_1,4
+017A 1606      00587                 bsf     PORTB,4
+017B 21D3      00588                 call    INTENSITY_DELAY
+017C 0186      00589                 clrf    PORTB
+017D 1AD1      00590                 btfsc   DISPLAY_RESULT_1,5
+017E 1686      00591                 bsf     PORTB,5
+017F 21D3      00592                 call    INTENSITY_DELAY
+0180 0186      00593                 clrf    PORTB
+0181 1B51      00594                 btfsc   DISPLAY_RESULT_1,6
+0182 1706      00595                 bsf     PORTB,6
+0183 21D3      00596                 call    INTENSITY_DELAY
+0184 0186      00597                 clrf    PORTB
+0185 1BD1      00598                 btfsc   DISPLAY_RESULT_1,7
+0186 1786      00599                 bsf     PORTB,7
+0187 21D3      00600                 call    INTENSITY_DELAY
+0188 0186      00601                 clrf    PORTB
+               00602 
+0189 1405      00603                 bsf     PORTA,RA0       ; less significant byte off
+018A 0000      00604                 nop                     ;cannot operate on same register due to pipelining, so wait
+018B 1185      00605                 bcf     PORTA,RA3       ; more significant byte on
+               00606 
+               00607                                         ; simple magic again - check bit in display result, and switch on same bit of PORTB
+               00608                                         ;calling intensity delay, then clear, and so on
+018C 1852      00609                 btfsc   DISPLAY_RESULT_2,0
+018D 1406      00610                 bsf     PORTB,0
+018E 21D3      00611                 call    INTENSITY_DELAY
+018F 0186      00612                 clrf    PORTB
+0190 18D2      00613                 btfsc   DISPLAY_RESULT_2,1
+0191 1486      00614                 bsf     PORTB,1
+0192 21D3      00615                 call    INTENSITY_DELAY
+0193 0186      00616                 clrf    PORTB
+0194 1952      00617                 btfsc   DISPLAY_RESULT_2,2
+0195 1506      00618                 bsf     PORTB,2
+0196 21D3      00619                 call    INTENSITY_DELAY
+0197 0186      00620                 clrf    PORTB
+0198 19D2      00621                 btfsc   DISPLAY_RESULT_2,3
+0199 1586      00622                 bsf     PORTB,3
+019A 21D3      00623                 call    INTENSITY_DELAY
+019B 0186      00624                 clrf    PORTB
+019C 1A52      00625                 btfsc   DISPLAY_RESULT_2,4
+019D 1606      00626                 bsf     PORTB,4
+019E 21D3      00627                 call    INTENSITY_DELAY
+019F 0186      00628                 clrf    PORTB
+01A0 1AD2      00629                 btfsc   DISPLAY_RESULT_2,5
+01A1 1686      00630                 bsf     PORTB,5
+01A2 21D3      00631                 call    INTENSITY_DELAY
+01A3 0186      00632                 clrf    PORTB
+01A4 1B52      00633                 btfsc   DISPLAY_RESULT_2,6
+01A5 1706      00634                 bsf     PORTB,6
+01A6 21D3      00635                 call    INTENSITY_DELAY
+01A7 0186      00636                 clrf    PORTB
+01A8 1BD2      00637                 btfsc   DISPLAY_RESULT_2,7
+01A9 1786      00638                 bsf     PORTB,7
+01AA 21D3      00639                 call    INTENSITY_DELAY
+gpasm-0.13.7 beta               RA5_zeroed_display_20mhz.asm5-20-2011  22:03:45          PAGE 16
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+ 
+01AB 0186      00640                 clrf    PORTB
+               00641 
+01AC 1585      00642                 bsf     PORTA,RA3       ; more significant byte off
+01AD 0000      00643                 nop                     ;cannot operate on same register due to pipelinging, so wait
+01AE 1205      00644                 bcf     PORTA,RA4       ; most significant byte on
+               00645 
+               00646                                         ; same simple magic - check bit in display result, and switch on same bit of PORTB
+               00647                                         ;calling intensity delay, then clear, and so on
+01AF 1853      00648                 btfsc   DISPLAY_RESULT_3,0
+01B0 1406      00649                 bsf     PORTB,0
+01B1 21D3      00650                 call    INTENSITY_DELAY
+01B2 0186      00651                 clrf    PORTB
+01B3 18D3      00652                 btfsc   DISPLAY_RESULT_3,1
+01B4 1486      00653                 bsf     PORTB,1
+01B5 21D3      00654                 call    INTENSITY_DELAY
+01B6 0186      00655                 clrf    PORTB
+01B7 1953      00656                 btfsc   DISPLAY_RESULT_3,2
+01B8 1506      00657                 bsf     PORTB,2
+01B9 21D3      00658                 call    INTENSITY_DELAY
+01BA 0186      00659                 clrf    PORTB
+01BB 19D3      00660                 btfsc   DISPLAY_RESULT_3,3
+01BC 1586      00661                 bsf     PORTB,3
+01BD 21D3      00662                 call    INTENSITY_DELAY
+01BE 0186      00663                 clrf    PORTB
+01BF 1A53      00664                 btfsc   DISPLAY_RESULT_3,4
+01C0 1606      00665                 bsf     PORTB,4
+01C1 21D3      00666                 call    INTENSITY_DELAY
+01C2 0186      00667                 clrf    PORTB
+01C3 1AD3      00668                 btfsc   DISPLAY_RESULT_3,5
+01C4 1686      00669                 bsf     PORTB,5
+01C5 21D3      00670                 call    INTENSITY_DELAY
+01C6 0186      00671                 clrf    PORTB
+01C7 1B53      00672                 btfsc   DISPLAY_RESULT_3,6
+01C8 1706      00673                 bsf     PORTB,6
+01C9 21D3      00674                 call    INTENSITY_DELAY
+01CA 0186      00675                 clrf    PORTB
+01CB 1BD3      00676                 btfsc   DISPLAY_RESULT_3,7
+01CC 1786      00677                 bsf     PORTB,7
+01CD 21D3      00678                 call    INTENSITY_DELAY
+01CE 0186      00679                 clrf    PORTB
+               00680                 
+01CF 1605      00681                 bsf     PORTA,RA4       ;most significant byte off
+01D0 0008      00682                 return 
+               00683 
+               00684 
+               00685 ;INTENSITY_DELAY:
+               00686 
+01D1 0000      00687                 nop
+               00688 ;               nop     ;lenght defines intensity by amount of energy pumped into each led. 
+               00689 
+01D2 0008      00690                 return
+               00691 
+01D3 00692 INTENSITY_DELAY:
+01D3 00D6      00693                 movwf   DELAY   
+gpasm-0.13.7 beta               RA5_zeroed_display_20mhz.asm5-20-2011  22:03:45          PAGE 17
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+ 
+01D4 00694 INTENSITY_DELAY_LOOP1:
+Message [305] : Using default destination of 1 (file).
+01D4 0BD6      00695                 decfsz  DELAY
+01D5 29D4      00696                 goto    INTENSITY_DELAY_LOOP1 
+01D6 0008      00697                 return
+               00698 
+               00699 
+               00700 ; ------------------thiiiis is theory
+               00701 
+               00702 ;INTENSITY_DELAY
+               00703                 bank1
+01D7 1683          M                 bsf     STATUS,RP0
+01D8 1085      00704                 bcf     TRISA,RA1               ; set RA1 pin as output - it should allow RA5 cap discharge by circuit 
+01D9 1685      00705                 bsf     TRISA,RA5               ; tristate RA5 pin. it is tristate anyway, but let's make it input 
+               00706                 bank0                           ; switch back to bank0 
+01DA 1283          M                 bcf     STATUS,RP0
+01DB 1085      00707                 bcf     PORTA,RA1               ; set RA1 to 0 . it should discharge RA5 cap by circuit trickery (diode :)
+01DC 00708 INTENSITY_DELAY1:
+01DC 1E85      00709                 btfss   PORTA,RA5               ; check if delay capacitor got charged, skip if yes
+01DD 29DC      00710                 goto    INTENSITY_DELAY1        ; if no, just wait for it to happen. 
+               00711 
+               00712                 bank1                           ; when done switch back to bank1
+01DE 1683          M                 bsf     STATUS,RP0
+01DF 1485      00713                 bsf     TRISA,RA1               ; set RA1 as input back 
+               00714                 bank0
+01E0 1283          M                 bcf     STATUS,RP0
+01E1 0008      00715                 return
+               00716 
+               00717 
+               00718 
+               00719 
+               00720 
+               00721 
+               00722 ;           Comparator Interrupt Service routine
+               00723 
+01E2 00724 COMP:   
+               00725                 bank0
+01E2 1283          M                 bcf     STATUS,RP0
+01E3 1010      00726                 bcf T1CON,TMR1ON ; Stop Timer 1
+01E4 130C      00727                 bcf PIR1,CMIF    ; Clear comparator Interrupt flag
+01E5 0000      00728                 nop
+01E6 100C      00729                 bcf PIR1,TMR1IF  ; mask tmr1 interrupt flag
+               00730                 bank1
+01E7 1683          M                 bsf     STATUS,RP0
+01E8 130C      00731                 bcf PIE1,CMIE    ; Mask Comparator Int
+01E9 0000      00732                 nop
+01EA 100C      00733                 bcf PIE1,TMR1IE  ; mask tmr1 interrupt
+               00734                 ;PIR1 should contain reason why interrupt occured. 
+01EB 0009      00735                 retfie 
+gpasm-0.13.7 beta               RA5_zeroed_display_20mhz.asm5-20-2011  22:03:45          PAGE 18
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+ADEN                              00000003
+ASK_USER_IF_ZERO                  00000021
+BARGRAF_DISPLAY_W                 000000A1
+BIT_3_NOT                         0000015B
+BIT_4_NOT                         00000154
+BIT_5_NOT                         00000148
+BIT_6_NOT                         00000132
+BIT_7_NOT                         00000108
+BRGH                              00000002
+C                                 00000000
+C1INV                             00000004
+C1OUT                             00000006
+C2INV                             00000005
+C2OUT                             00000007
+CCP1CON                           00000017
+CCP1IE                            00000002
+CCP1IF                            00000002
+CCP1M0                            00000000
+CCP1M1                            00000001
+CCP1M2                            00000002
+CCP1M3                            00000003
+CCP1X                             00000005
+CCP1Y                             00000004
+CCPR1H                            00000016
+CCPR1L                            00000015
+CIS                               00000003
+CM0                               00000000
+CM1                               00000001
+CM2                               00000002
+CMCON                             0000001F
+CMIE                              00000006
+CMIF                              00000006
+COMP                              000001E2
+COMPARATOR_DISCHARGE_TIME         00000058
+COMPARATOR_DISCHARGE_TIME2        00000059
+COMPENSATE_RESULT                 00000059
+CONVERT                           0000008B
+CREN                              00000004
+CSRC                              00000007
+DC                                00000001
+DELAY                             00000056
+DELAY2                            00000057
+DISCHARGE_COMPARATOR              00000086
+DISCHARGE_COMPARATOR2             00000085
+DISCHARGE_COMPARATOR_CAP          00000071
+DISCHARGE_COMPARATOR_CAPACITOR    0000007C
+DISPLAY_HIGH                      0000001F
+DISPLAY_LOW                       00000019
+DISPLAY_RESULT_1                  00000051
+DISPLAY_RESULT_2                  00000052
+DISPLAY_RESULT_3                  00000053
+DISPLAY_RESULT_4                  00000054
+DISPLAY_TEMP1                     00000050
+gpasm-0.13.7 beta               RA5_zeroed_display_20mhz.asm5-20-2011  22:03:45          PAGE 19
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+ 
+EEADR                             0000009B
+EECON1                            0000009C
+EECON2                            0000009D
+EEDATA                            0000009A
+EEIE                              00000007
+EEIF                              00000007
+F                                 00000001
+FERR                              00000002
+FSR                               00000004
+GETDATA                           0000009C
+GIE                               00000007
+INDF                              00000000
+INIT                              00000005
+INTCON                            0000000B
+INTE                              00000004
+INTEDG                            00000006
+INTENSITY_DELAY                   000001D3
+INTENSITY_DELAY1                  000001DC
+INTENSITY_DELAY_LOOP1             000001D4
+INTENSITY_KNOB                    00000055
+INTERRUPT_STATUS                  00000060
+INTF                              00000001
+IRP                               00000007
+MAIN                              00000010
+NOT_BO                            00000000
+NOT_BOD                           00000000
+NOT_BOR                           00000000
+NOT_PD                            00000003
+NOT_POR                           00000001
+NOT_RBPU                          00000007
+NOT_T1SYNC                        00000002
+NOT_TO                            00000004
+OERR                              00000001
+OPTION_REG                        00000081
+OSCF                              00000003
+PCL                               00000002
+PCLATH                            0000000A
+PCON                              0000008E
+PEIE                              00000006
+PIE1                              0000008C
+PIR1                              0000000C
+PORTA                             00000005
+PORTB                             00000006
+PR2                               00000092
+PS0                               00000000
+PS1                               00000001
+PS2                               00000002
+PSA                               00000003
+RA0                               00000000
+RA1                               00000001
+RA2                               00000002
+RA3                               00000003
+RA4                               00000004
+RA5                               00000005
+gpasm-0.13.7 beta               RA5_zeroed_display_20mhz.asm5-20-2011  22:03:45          PAGE 20
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+ 
+RA6                               00000006
+RA7                               00000007
+RB0                               00000000
+RB1                               00000001
+RB2                               00000002
+RB3                               00000003
+RB4                               00000004
+RB5                               00000005
+RB6                               00000006
+RB7                               00000007
+RBIE                              00000003
+RBIF                              00000000
+RCIE                              00000005
+RCIF                              00000005
+RCREG                             0000001A
+RCSTA                             00000018
+RD                                00000000
+RP0                               00000005
+RP1                               00000006
+RX9                               00000006
+RX9D                              00000000
+SET_RA4_HIGH                      00000161
+SPBRG                             00000099
+SPEN                              00000007
+SREN                              00000005
+STATUS                            00000003
+SUBTRACTION_REGISTER1             00000061
+SUBTRACTION_REGISTER2             00000062
+SYNC                              00000004
+T0CS                              00000005
+T0IE                              00000005
+T0IF                              00000002
+T0SE                              00000004
+T1CKPS0                           00000004
+T1CKPS1                           00000005
+T1CON                             00000010
+T1OSCEN                           00000003
+T2CKPS0                           00000000
+T2CKPS1                           00000001
+T2CON                             00000012
+TMR0                              00000001
+TMR1CS                            00000001
+TMR1H                             0000000F
+TMR1IE                            00000000
+TMR1IF                            00000000
+TMR1L                             0000000E
+TMR1ON                            00000000
+TMR2                              00000011
+TMR2IE                            00000001
+TMR2IF                            00000001
+TMR2ON                            00000002
+TOUTPS0                           00000003
+TOUTPS1                           00000004
+TOUTPS2                           00000005
+gpasm-0.13.7 beta               RA5_zeroed_display_20mhz.asm5-20-2011  22:03:45          PAGE 21
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+ 
+TOUTPS3                           00000006
+TRISA                             00000085
+TRISB                             00000086
+TRMT                              00000001
+TX9                               00000006
+TX9D                              00000000
+TXEN                              00000005
+TXIE                              00000004
+TXIF                              00000004
+TXREG                             00000019
+TXSTA                             00000098
+USER_HOLDS_KEY                    00000050
+VR0                               00000000
+VR1                               00000001
+VR2                               00000002
+VR3                               00000003
+VRCON                             0000009F
+VREN                              00000007
+VROE                              00000006
+VRR                               00000005
+W                                 00000000
+WAIT                              0000009A
+WR                                00000001
+WREN                              00000002
+WRERR                             00000003
+Z                                 00000002
+ZERO_1                            00000064
+ZERO_1_WRITE                      00000047
+ZERO_2                            00000063
+ZERO_2_WRITE                      00000036
+_BODEN_OFF                        00003FBF
+_BODEN_ON                         00003FFF
+_CP_50                            00002BFF
+_CP_75                            000017FF
+_CP_ALL                           000003FF
+_CP_OFF                           00003FFF
+_DATA_CP_OFF                      00003FFF
+_DATA_CP_ON                       00003EFF
+_ER_OSC_CLKOUT                    00003FFF
+_ER_OSC_NOCLKOUT                  00003FFE
+_EXTCLK_OSC                       00003FEF
+_HS_OSC                           00003FEE
+_INTRC_OSC_CLKOUT                 00003FFD
+_INTRC_OSC_NOCLKOUT               00003FFC
+_LP_OSC                           00003FEC
+_LVP_OFF                          00003F7F
+_LVP_ON                           00003FFF
+_MCLRE_OFF                        00003FDF
+_MCLRE_ON                         00003FFF
+_PWRTE_OFF                        00003FFF
+_PWRTE_ON                         00003FF7
+_WDT_OFF                          00003FFB
+_WDT_ON                           00003FFF
+_XT_OSC                           00003FED
+gpasm-0.13.7 beta               RA5_zeroed_display_20mhz.asm5-20-2011  22:03:45          PAGE 22
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+ 
+__16F627                          00000001
+
+
+MEMORY USAGE MAP ('X' = Used,  '-' = Unused)
+
+00000000 : X---XXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+00000040 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+00000080 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+000000c0 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+00000100 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+00000140 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+00000180 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+000001c0 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXX---- ----------------
+00002000 : -------X-------- ---------------- ---------------- ----------------
+
+All other memory blocks unused.
+
+Program Memory Words Used: 490
+
+
+Errors   :       0
+Warnings :       0 reported,       0 suppressed
+Messages :     131 reported,      43 suppressed
+

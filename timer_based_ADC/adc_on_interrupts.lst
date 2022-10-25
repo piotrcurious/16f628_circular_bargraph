@@ -1,0 +1,351 @@
+gpasm-0.13.3 beta               adc_on_interrupts.asm4-29-2009  15:01:44          PAGE  1
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+ 
+               00001 LIST            P=PIC16F627
+               00002 #INCLUDE        "p16f627.inc"
+               00001         LIST
+               00002 ; P16F627.INC  Standard Header File, Version 1.01    Microchip Technology, Inc.
+               00261         LIST
+               00003 
+002007 3F50    00004         __CONFIG        _BODEN_ON & _CP_OFF & _DATA_CP_OFF & _PWRTE_ON & _WDT_OFF & _LVP_OFF & _MCLRE_OFF & _INTRC_OSC_NOCLKOUT
+               00005 
+               00006 ;---------macros
+               00007 
+               00008 bank0           macro
+               00009                 bcf     STATUS,RP0
+               00010                 endm
+               00011 bank1           macro
+               00012                 bsf     STATUS,RP0
+               00013                 endm
+               00014 
+               00015 ;---------RAM registers
+               00016 
+  00000050     00017 SAVE_W          EQU             0X50    ; TEMP FOR ISR
+  00000051     00018 SAVE_S          EQU             0X51    ; TEMP FOR ISR
+  00000052     00019 SAVE_P          EQU             0X52
+  00000053     00020 recogn_counter  EQU             0x53    ; recognitions counter
+  00000054     00021 interrupt_counter EQU           0x54    ; counter of interrupts
+0000           00022                 org 0            ; Reset Vector
+0000 2805      00023                 goto INIT
+               00024 
+0004           00025                 org 4            ; Interrupt Vector
+0004 281B      00026                 goto COMP
+0005           00027                 org 5
+               00028 
+0005           00029 INIT:           bank0
+0005 1283          M                 bcf     STATUS,RP0
+0006 3005      00030                 movlw H'05'      ; Comp config mode 5
+0007 009F      00031                 movwf CMCON
+0008 3014      00032                 movlw H'14'      ; Timer 1 prescale by 2
+0009 0090      00033                 movwf T1CON      ; A 1 MHz clock is used
+000A 0185      00034                 clrf PORTA
+000B 0186      00035                 clrf PORTB
+               00036                 bank1
+000C 1683          M                 bsf     STATUS,RP0
+Message [302] : Register in operand not in bank 0. Ensure bank bits are correct.
+000D 0186      00037                 clrf    TRISB   ; all RB are outputs 
+000E 30CF      00038                 movlw H'CF'      ; Enable Vref = 3.6v
+Message [302] : Register in operand not in bank 0. Ensure bank bits are correct.
+000F 009F      00039                 movwf VRCON
+0010 178B      00040                 bsf INTCON,GIE   ; Enable Global Int
+0011 170B      00041                 bsf INTCON,PEIE  ; Unmask Peripheral Int
+               00042 
+0012           00043 CONVERT:
+               00044                 bank1
+0012 1683          M                 bsf     STATUS,RP0
+Message [302] : Register in operand not in bank 0. Ensure bank bits are correct.
+0013 1B0C      00045 WAIT:           btfsc PIE1,CMIE  ; Wait for comp Int
+gpasm-0.13.3 beta               adc_on_interrupts.asm4-29-2009  15:01:44          PAGE  2
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+ 
+               00046                                 ; ie wait until Int
+0014 2813      00047                 goto WAIT        ; Enable bit has been
+               00048                                 ; cleared
+0015           00049 GETDATA:                        ; Timer 1 contains
+               00050                 
+               00051                                 ; light level value
+               00052 
+               00053                 bank0 
+0015 1283          M                 bcf     STATUS,RP0
+               00054 
+0016 1C54      00055                 btfss   interrupt_counter,0
+0017 1206      00056                 bcf     PORTB,4
+0018 1854      00057                 btfsc   interrupt_counter,0
+0019 1606      00058                 bsf     PORTB,4
+               00059                 
+               00060 
+001A 2812      00061                 goto CONVERT     ; Loop for new data
+               00062 
+               00063 ;           Comparator Interrupt Service routine
+               00064 
+001B           00065 COMP:           
+001B 00D0      00066                 MOVWF   SAVE_W                  ; SAVE W REGISTER
+001C 0E03      00067                 SWAPF   STATUS,W                ; SWAP STATUS TO BE SAVED INTO W
+001D 00D1      00068                 MOVWF   SAVE_S                  ; SAVE STATUS REGISTER
+001E 0E0A      00069                 SWAPF   PCLATH,W
+001F 00D2      00070                 MOVWF   SAVE_P                  ; SAVE PCLATH
+               00071 
+               00072                 bank0 
+0020 1283          M                 bcf     STATUS,RP0
+               00073 ; DEBUG
+               00074 
+Message [305] : Using default destination of 1 (file).
+0021 03D4      00075                 decf  interrupt_counter
+0022 1010      00076                 bcf T1CON,TMR1ON ; Stop Timer 1
+0023 130C      00077                 bcf PIR1,CMIF    ; Clear Interrupt flag
+               00078                 bank1
+0024 1683          M                 bsf     STATUS,RP0
+Message [302] : Register in operand not in bank 0. Ensure bank bits are correct.
+0025 130C      00079                 bcf PIE1,CMIE    ; Mask Comparator Int
+               00080 
+               00081                 bank1            ; 
+0026 1683          M                 bsf     STATUS,RP0
+Message [302] : Register in operand not in bank 0. Ensure bank bits are correct.
+0027 1085      00082                 bcf TRISA,1      ; Set RA1 as output
+               00083                 bank0
+0028 1283          M                 bcf     STATUS,RP0
+0029 1085      00084                 bcf PORTA,1      ; Discharge capacitor
+002A 130C      00085                 bcf PIR1,CMIF    ; Clear comp Int flag
+               00086                 bank1
+002B 1683          M                 bsf     STATUS,RP0
+Message [302] : Register in operand not in bank 0. Ensure bank bits are correct.
+002C 1485      00087                 bsf TRISA,1      ; Reset RA1 as input,
+               00088                                  ; cap starts charging
+Message [302] : Register in operand not in bank 0. Ensure bank bits are correct.
+gpasm-0.13.3 beta               adc_on_interrupts.asm4-29-2009  15:01:44          PAGE  3
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+ 
+002D 170C      00089                 bsf PIE1,CMIE    ; Unmask Comp Int  
+               00090                 bank0
+002E 1283          M                 bcf     STATUS,RP0
+002F 018E      00091                 clrf TMR1L       ; Clear Timer 1 L
+0030 018F      00092                 clrf TMR1H       ; Clear Timer 1 H
+0031 1410      00093                 bsf T1CON,TMR1ON ; Start Timer 1
+0032 089F      00094                 movf CMCON,f     ; Read to sync output
+               00095 
+               00096 
+0033 0E52      00097                 SWAPF   SAVE_P,W
+0034 008A      00098                 MOVWF   PCLATH                  ; RESTORE PCLATH
+0035 0E51      00099                 SWAPF   SAVE_S,W
+0036 0083      00100                 MOVWF   STATUS                  ; RESTORE STATUS REGISTER - RESTORES BANK
+0037 0ED0      00101                 SWAPF   SAVE_W,F
+0038 0E50      00102                 SWAPF   SAVE_W,W                ; RESTORE W REGISTER
+               00103 
+0039 0009      00104                 retfie 
+gpasm-0.13.3 beta               adc_on_interrupts.asm4-29-2009  15:01:44          PAGE  4
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+ADEN                              00000003
+BRGH                              00000002
+C                                 00000000
+C1INV                             00000004
+C1OUT                             00000006
+C2INV                             00000005
+C2OUT                             00000007
+CCP1CON                           00000017
+CCP1IE                            00000002
+CCP1IF                            00000002
+CCP1M0                            00000000
+CCP1M1                            00000001
+CCP1M2                            00000002
+CCP1M3                            00000003
+CCP1X                             00000005
+CCP1Y                             00000004
+CCPR1H                            00000016
+CCPR1L                            00000015
+CIS                               00000003
+CM0                               00000000
+CM1                               00000001
+CM2                               00000002
+CMCON                             0000001F
+CMIE                              00000006
+CMIF                              00000006
+COMP                              0000001B
+CONVERT                           00000012
+CREN                              00000004
+CSRC                              00000007
+DC                                00000001
+EEADR                             0000009B
+EECON1                            0000009C
+EECON2                            0000009D
+EEDATA                            0000009A
+EEIE                              00000007
+EEIF                              00000007
+F                                 00000001
+FERR                              00000002
+FSR                               00000004
+GETDATA                           00000015
+GIE                               00000007
+INDF                              00000000
+INIT                              00000005
+INTCON                            0000000B
+INTE                              00000004
+INTEDG                            00000006
+INTF                              00000001
+IRP                               00000007
+NOT_BO                            00000000
+NOT_BOD                           00000000
+NOT_BOR                           00000000
+NOT_PD                            00000003
+NOT_POR                           00000001
+gpasm-0.13.3 beta               adc_on_interrupts.asm4-29-2009  15:01:44          PAGE  5
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+ 
+NOT_RBPU                          00000007
+NOT_T1SYNC                        00000002
+NOT_TO                            00000004
+OERR                              00000001
+OPTION_REG                        00000081
+OSCF                              00000003
+PCL                               00000002
+PCLATH                            0000000A
+PCON                              0000008E
+PEIE                              00000006
+PIE1                              0000008C
+PIR1                              0000000C
+PORTA                             00000005
+PORTB                             00000006
+PR2                               00000092
+PS0                               00000000
+PS1                               00000001
+PS2                               00000002
+PSA                               00000003
+RBIE                              00000003
+RBIF                              00000000
+RCIE                              00000005
+RCIF                              00000005
+RCREG                             0000001A
+RCSTA                             00000018
+RD                                00000000
+RP0                               00000005
+RP1                               00000006
+RX9                               00000006
+RX9D                              00000000
+SAVE_P                            00000052
+SAVE_S                            00000051
+SAVE_W                            00000050
+SPBRG                             00000099
+SPEN                              00000007
+SREN                              00000005
+STATUS                            00000003
+SYNC                              00000004
+T0CS                              00000005
+T0IE                              00000005
+T0IF                              00000002
+T0SE                              00000004
+T1CKPS0                           00000004
+T1CKPS1                           00000005
+T1CON                             00000010
+T1OSCEN                           00000003
+T2CKPS0                           00000000
+T2CKPS1                           00000001
+T2CON                             00000012
+TMR0                              00000001
+TMR1CS                            00000001
+TMR1H                             0000000F
+TMR1IE                            00000000
+TMR1IF                            00000000
+gpasm-0.13.3 beta               adc_on_interrupts.asm4-29-2009  15:01:44          PAGE  6
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+ 
+TMR1L                             0000000E
+TMR1ON                            00000000
+TMR2                              00000011
+TMR2IE                            00000001
+TMR2IF                            00000001
+TMR2ON                            00000002
+TOUTPS0                           00000003
+TOUTPS1                           00000004
+TOUTPS2                           00000005
+TOUTPS3                           00000006
+TRISA                             00000085
+TRISB                             00000086
+TRMT                              00000001
+TX9                               00000006
+TX9D                              00000000
+TXEN                              00000005
+TXIE                              00000004
+TXIF                              00000004
+TXREG                             00000019
+TXSTA                             00000098
+VR0                               00000000
+VR1                               00000001
+VR2                               00000002
+VR3                               00000003
+VRCON                             0000009F
+VREN                              00000007
+VROE                              00000006
+VRR                               00000005
+W                                 00000000
+WAIT                              00000013
+WR                                00000001
+WREN                              00000002
+WRERR                             00000003
+Z                                 00000002
+_BODEN_OFF                        00003FBF
+_BODEN_ON                         00003FFF
+_CP_50                            00002BFF
+_CP_75                            000017FF
+_CP_ALL                           000003FF
+_CP_OFF                           00003FFF
+_DATA_CP_OFF                      00003FFF
+_DATA_CP_ON                       00003EFF
+_ER_OSC_CLKOUT                    00003FFF
+_ER_OSC_NOCLKOUT                  00003FFE
+_EXTCLK_OSC                       00003FEF
+_HS_OSC                           00003FEE
+_INTRC_OSC_CLKOUT                 00003FFD
+_INTRC_OSC_NOCLKOUT               00003FFC
+_LP_OSC                           00003FEC
+_LVP_OFF                          00003F7F
+_LVP_ON                           00003FFF
+_MCLRE_OFF                        00003FDF
+_MCLRE_ON                         00003FFF
+_PWRTE_OFF                        00003FFF
+gpasm-0.13.3 beta               adc_on_interrupts.asm4-29-2009  15:01:44          PAGE  7
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+ 
+_PWRTE_ON                         00003FF7
+_WDT_OFF                          00003FFB
+_WDT_ON                           00003FFF
+_XT_OSC                           00003FED
+__16F627                          00000001
+interrupt_counter                 00000054
+recogn_counter                    00000053
+
+
+MEMORY USAGE MAP ('X' = Used,  '-' = Unused)
+
+00000000 : X---XXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXX------
+00002000 : -------X-------- ---------------- ---------------- ----------------
+
+All other memory blocks unused.
+
+Program Memory Words Used: 56
+
+
+Errors   :       0
+Warnings :       0 reported,       0 suppressed
+Messages :       8 reported,       0 suppressed
+

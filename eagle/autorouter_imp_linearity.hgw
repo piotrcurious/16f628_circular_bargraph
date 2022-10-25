@@ -1,0 +1,25 @@
+EAGLE AutoRouter Statistics:
+
+Job           : /web-mszyca242/mycelium/24_led_voltmeter/16f627_24_led_voltmeter_bridges_improved_linearity_complete_v.1.3.2-bold.brd
+
+Start at      : 00:19:04 (13 Jun 2010)
+End at        : 00:20:41 (13 Jun 2010)
+Elapsed time  : 00:01:37
+
+Signals       :    34   RoutingGrid: 1 mil  Layers: 1
+Connections   :    77   predefined:  63 ( 45 Vias )
+
+Router memory :   25136508
+
+Passname          :    Busses     Route Optimize1 Optimize2 Optimize3 Optimize4
+
+Time per pass     :  00:00:03  00:00:14  00:00:21  00:00:19  00:00:20  00:00:20
+Number of Ripups  :         0         2         0         0         0         0
+max. Level        :         0         1         0         0         0         0
+max. Total        :         0         4         0         0         0         0
+
+Routed            :         0        14        14        14        14        14
+Vias              :         0         0         0         0         0         0
+Resolution        :    81.8 %   100.0 %   100.0 %   100.0 %   100.0 %   100.0 %
+
+Final             : 100.0% finished

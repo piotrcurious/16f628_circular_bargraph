@@ -1,0 +1,25 @@
+there are several prototype versions so far.
+
+most advanced, "RA5_zeroed_display_20mhz" and intRC one 
+can also use offset, stored in EEPROM nonvolatile memory!
+
+RC5 should be pulled up weakly by some resistor (i.e. 10k) 
+and as it is close to GND pin, no extra board space to set '0' 
+is nessesary. one just needs to set desired voltage, and then short RA5 to ground, 
+i.e. by inserting screwdriwer inbetween pins 4 and 5. 
+
+then, microcontroller will set current ADC reading as offset, and will subtract it from each subsequent
+reading. 
+
+this way one can create i.e. battery state checker very easily, which will measure just 'interesting' part of the scale,
+i.e. voltages 10-15V (ofc. using voltage divider!) for lead acid, or 3-4.2V for li-polymer.
+
+
+note though that there is no code yet to handle under or over voltage, so displaying "sub zero" or above of scale values 
+make display to roll over.  with use of intRC osc one gets additional 2 pins left i.e. for buzzer , charge control, or serial i/o.
+
+
+note aswell that using intRC osc or xtal below 8mhz will make display flicker visibly. it's due to long 16bit conversion time.
+with 20mhz xtal display is quite stable, and one can use almost 30mhz xtal if using voltage of 5 or 5.5V, "overclocking" pic. 
+
+
